@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import useEscapeKey from '../../hooks/useEscapeKey';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,13 +35,7 @@ export default function UpdateModal({
   const overlayRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape only when update is not in progress.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && phase === 'available') onLater();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [phase, onLater]);
+  useEscapeKey(onLater, phase === 'available');
 
   const isLocked = phase === 'downloading' || phase === 'applying';
 

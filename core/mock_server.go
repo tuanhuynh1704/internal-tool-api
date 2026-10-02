@@ -74,7 +74,7 @@ func (m *MockServerEngine) Start(port int, routes []MockRoute) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", m.handleRequest)
 
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return fmt.Errorf("cannot bind mock server on port %d: %w", port, err)
 	}
@@ -164,7 +164,7 @@ func (m *MockServerEngine) handleRequest(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 		methodMatch := route.Method == "*" || strings.EqualFold(route.Method, reqMethod)
-		pathMatch := route.Path == "*" || route.Path == reqPath || strings.HasPrefix(reqPath, route.Path)
+		pathMatch := route.Path == "*" || route.Path == reqPath || (route.Path != "/" && strings.HasSuffix(route.Path, "/") == false && strings.HasPrefix(reqPath, route.Path+"/"))
 		if methodMatch && pathMatch {
 			matchedRoute = route
 			break

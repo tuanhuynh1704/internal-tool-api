@@ -49,13 +49,17 @@ export function GetEnvironmentsFromDB():Promise<Array<main.DBEnvironment>>;
 
 export function GetMockServerStatus():Promise<core.MockServerStatus>;
 
-export function GetScenariosFromDB():Promise<Array<main.DBScenario>>;
+export function GetScenarioTestResults(arg1:string):Promise<Array<main.DBScenarioTestResult>>;
 
-export function GetScreenshotBase64(arg1:string):Promise<string>;
+export function GetScenarioTestRuns(arg1:string):Promise<Array<main.DBScenarioTestRun>>;
+
+export function GetScenariosFromDB():Promise<Array<main.DBScenario>>;
 
 export function GetUIScenario(arg1:string):Promise<main.DBUIScenario>;
 
 export function GetUIScenarios():Promise<Array<main.DBUIScenario>>;
+
+export function GetUIScreenshot(arg1:string,arg2:string):Promise<string>;
 
 export function GetUITestResults(arg1:string):Promise<Array<main.DBUITestResult>>;
 
@@ -63,9 +67,13 @@ export function GetUITestRuns(arg1:string):Promise<Array<main.DBUITestRun>>;
 
 export function GetUpdateStatus():Promise<main.UpdateStatus>;
 
-export function InstallPlaywrightBrowsers():Promise<void>;
+export function ImportPostmanCollection(arg1:string):Promise<main.PostmanImportResult>;
 
-export function RunUIScenario(arg1:string,arg2:string,arg3:boolean):Promise<ui.TestRunSummary>;
+export function InstallPlaywrightBrowsers(arg1:string):Promise<void>;
+
+export function RunScenario(arg1:string,arg2:string):Promise<main.AutomationRunSummary>;
+
+export function RunUIScenario(arg1:string,arg2:string,arg3:boolean,arg4:boolean):Promise<ui.TestRunSummary>;
 
 export function SaveAllEnvironmentsToDB(arg1:Array<main.DBEnvironment>):Promise<void>;
 
@@ -80,6 +88,8 @@ export function StartDownloadUpdate(arg1:string,arg2:string,arg3:string):Promise
 export function StartMockServer(arg1:number,arg2:Array<core.MockRoute>):Promise<void>;
 
 export function StopMockServer():Promise<void>;
+
+export function StopScenario(arg1:string):Promise<void>;
 
 export function StopUIScenario(arg1:string):Promise<void>;
 

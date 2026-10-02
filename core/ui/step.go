@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -366,6 +367,9 @@ func checkMatch(actual, expected, op string) bool {
 		return strings.HasPrefix(actual, expected)
 	case "ends_with":
 		return strings.HasSuffix(actual, expected)
+	case "regex":
+		matched, err := regexp.MatchString(expected, actual)
+		return err == nil && matched
 	default:
 		return strings.Contains(actual, expected)
 	}

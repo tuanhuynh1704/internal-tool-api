@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -77,8 +78,13 @@ type App struct {
 	downloadedVersion string // version string of the downloaded binary
 	downloadPhase     string // "idle" | "downloading" | "done" | "error"
 
-	streamMu      sync.Mutex
-	streamCancels map[string]context.CancelFunc
+	streamMu       sync.Mutex
+	streamCancels  map[string]context.CancelFunc
+	streamVersions map[string]int
+
+	automationMu       sync.Mutex
+	automationCancels  map[string]context.CancelFunc
+	automationVersions map[string]int
 
 	mockServer *core.MockServerEngine
 
@@ -97,14 +103,17 @@ func NewApp() *App {
 	uiRunner := coreui.NewRunner(uiEngine, screenshotMgr)
 
 	return &App{
-		engine:        core.NewHttpClientEngine(true, 30),
-		dbManager:     dbm,
-		downloadPhase: "idle",
-		streamCancels: make(map[string]context.CancelFunc),
-		mockServer:    core.NewMockServerEngine(),
-		uiEngine:      uiEngine,
-		screenshotMgr: screenshotMgr,
-		uiRunner:      uiRunner,
+		engine:             core.NewHttpClientEngine(false, 30),
+		dbManager:          dbm,
+		downloadPhase:      "idle",
+		streamCancels:      make(map[string]context.CancelFunc),
+		streamVersions:     make(map[string]int),
+		automationCancels:  make(map[string]context.CancelFunc),
+		automationVersions: make(map[string]int),
+		mockServer:         core.NewMockServerEngine(),
+		uiEngine:           uiEngine,
+		screenshotMgr:      screenshotMgr,
+		uiRunner:           uiRunner,
 	}
 }
 
@@ -297,13 +306,20 @@ func (a *App) ExecuteStreamRequest(reqID string, payload core.RequestPayload) er
 	if a.streamCancels == nil {
 		a.streamCancels = make(map[string]context.CancelFunc)
 	}
+	if previous, exists := a.streamCancels[reqID]; exists {
+		previous()
+	}
+	a.streamVersions[reqID]++
+	version := a.streamVersions[reqID]
 	a.streamCancels[reqID] = cancel
 	a.streamMu.Unlock()
 
 	go func() {
 		defer func() {
 			a.streamMu.Lock()
-			delete(a.streamCancels, reqID)
+			if a.streamVersions[reqID] == version {
+				delete(a.streamCancels, reqID)
+			}
 			a.streamMu.Unlock()
 		}()
 
@@ -502,6 +518,112 @@ func (a *App) DeleteScenarioFromDB(id string) error {
 	return a.dbManager.DeleteScenario(id)
 }
 
+// RunScenario executes API automation in Go so it is reusable outside the UI,
+// cancellable while HTTP I/O is in progress, and persisted for later review.
+func (a *App) RunScenario(scenarioID, envID string) (AutomationRunSummary, error) {
+	if a.dbManager == nil {
+		return AutomationRunSummary{}, fmt.Errorf("database not initialized")
+	}
+	scenarios, err := a.dbManager.GetScenarios()
+	if err != nil {
+		return AutomationRunSummary{}, err
+	}
+	var scenario *DBScenario
+	for index := range scenarios {
+		if scenarios[index].ID == scenarioID {
+			scenario = &scenarios[index]
+			break
+		}
+	}
+	if scenario == nil {
+		return AutomationRunSummary{}, fmt.Errorf("scenario %s not found", scenarioID)
+	}
+	values := map[string]string{}
+	if envID != "" {
+		envs, err := a.dbManager.GetEnvironments()
+		if err != nil {
+			return AutomationRunSummary{}, err
+		}
+		for _, env := range envs {
+			if env.ID == envID {
+				for _, variable := range env.Variables {
+					if variable.Enabled && strings.TrimSpace(variable.Key) != "" {
+						values[strings.TrimSpace(variable.Key)] = variable.Value
+					}
+				}
+				break
+			}
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.automationMu.Lock()
+	if previous := a.automationCancels[scenarioID]; previous != nil {
+		previous()
+	}
+	a.automationVersions[scenarioID]++
+	version := a.automationVersions[scenarioID]
+	a.automationCancels[scenarioID] = cancel
+	a.automationMu.Unlock()
+	defer func() {
+		cancel()
+		a.automationMu.Lock()
+		if a.automationVersions[scenarioID] == version {
+			delete(a.automationCancels, scenarioID)
+		}
+		a.automationMu.Unlock()
+	}()
+	summary := runAutomationScenario(ctx, a.engine, *scenario, values, func(event AutomationProgressEvent) {
+		if a.ctx != nil {
+			wailsRuntime.EventsEmit(a.ctx, "automation:progress:"+scenarioID, event)
+			wailsRuntime.EventsEmit(a.ctx, "automation:progress", event)
+		}
+	})
+	records := make([]DBScenarioTestResult, 0, len(summary.StepResults))
+	for _, result := range summary.StepResults {
+		assertions, _ := json.Marshal(result.AssertionDetails)
+		extracted, _ := json.Marshal(result.Extracted)
+		headers, _ := json.Marshal(result.ResponseHeaders)
+		id, idErr := newImportID("api_res")
+		if idErr != nil {
+			id = fmt.Sprintf("api_res_%s_%d", summary.RunID, result.StepOrder)
+		}
+		records = append(records, DBScenarioTestResult{ID: id, RunID: summary.RunID, StepID: result.StepID, StepOrder: result.StepOrder, Status: map[bool]string{true: "PASSED", false: "FAILED"}[result.Passed], Duration: result.DurationMs, Method: result.Method, URL: result.URL, HTTPStatus: result.Status, ResponseBody: result.ResponseBody, ResponseHeaders: string(headers), AssertionDetails: string(assertions), ExtractedVars: string(extracted), Error: result.Error})
+	}
+	if err := a.dbManager.SaveScenarioTestRun(DBScenarioTestRun{ID: summary.RunID, ScenarioID: summary.ScenarioID, Status: summary.Status, StartedAt: time.Now().Add(-time.Duration(summary.TotalDurationMs) * time.Millisecond).Format("2006-01-02 15:04:05"), FinishedAt: time.Now().Format("2006-01-02 15:04:05"), Duration: summary.TotalDurationMs}, records); err != nil {
+		return summary, fmt.Errorf("persist automation run: %w", err)
+	}
+	return summary, nil
+}
+
+func (a *App) StopScenario(scenarioID string) {
+	a.automationMu.Lock()
+	defer a.automationMu.Unlock()
+	if cancel := a.automationCancels[scenarioID]; cancel != nil {
+		cancel()
+	}
+}
+func (a *App) GetScenarioTestRuns(scenarioID string) ([]DBScenarioTestRun, error) {
+	if a.dbManager == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return a.dbManager.GetScenarioTestRuns(scenarioID)
+}
+func (a *App) GetScenarioTestResults(runID string) ([]DBScenarioTestResult, error) {
+	if a.dbManager == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return a.dbManager.GetScenarioTestResults(runID)
+}
+
+// ImportPostmanCollection imports a complete Postman v2 collection atomically.
+// The backend owns ID allocation so parent references remain valid throughout the import.
+func (a *App) ImportPostmanCollection(collectionJSON string) (PostmanImportResult, error) {
+	if a.dbManager == nil {
+		return PostmanImportResult{}, fmt.Errorf("database not initialized")
+	}
+	return a.dbManager.ImportPostmanCollection(collectionJSON)
+}
+
 // ─── Workspace Export / Import ────────────────────────────────────────────────
 
 type FullWorkspaceExport struct {
@@ -568,7 +690,7 @@ func (a *App) DeleteUIScenario(id string) error {
 	return a.dbManager.DeleteUIScenario(id)
 }
 
-func (a *App) RunUIScenario(scenarioID string, envID string, headless bool) (coreui.TestRunSummary, error) {
+func (a *App) RunUIScenario(scenarioID string, envID string, headless bool, ignoreHTTPSErrors bool) (coreui.TestRunSummary, error) {
 	if a.dbManager == nil {
 		return coreui.TestRunSummary{}, fmt.Errorf("database not initialized")
 	}
@@ -625,7 +747,7 @@ func (a *App) RunUIScenario(scenarioID string, envID string, headless bool) (cor
 	}
 
 	// Run with progress callback emitting Wails events
-	summary := a.uiRunner.RunScenario(context.Background(), scenario, envVars, headless, func(event coreui.StepProgressEvent) {
+	summary := a.uiRunner.RunScenario(context.Background(), scenario, envVars, headless, ignoreHTTPSErrors, func(event coreui.StepProgressEvent) {
 		if a.ctx != nil {
 			wailsRuntime.EventsEmit(a.ctx, "uitest:progress:"+scenarioID, event)
 			wailsRuntime.EventsEmit(a.ctx, "uitest:progress", event)
@@ -647,13 +769,17 @@ func (a *App) RunUIScenario(scenarioID string, envID string, headless bool) (cor
 			ID:             fmt.Sprintf("res_%s_%d", summary.RunID, i+1),
 			RunID:          summary.RunID,
 			StepID:         res.StepID,
+			StepOrder:      res.StepOrder,
 			Status:         string(res.Status),
 			Error:          res.Error,
 			Duration:       res.DurationMs,
 			ScreenshotPath: res.ScreenshotPath,
+			Details:        res.Details,
 		}
 	}
-	_ = a.dbManager.SaveUITestRun(runRecord, resultsRecords)
+	if err := a.dbManager.SaveUITestRun(runRecord, resultsRecords); err != nil {
+		return summary, fmt.Errorf("persist UI test run: %w", err)
+	}
 
 	return summary, nil
 }
@@ -678,16 +804,26 @@ func (a *App) GetUITestResults(runID string) ([]DBUITestResult, error) {
 	return a.dbManager.GetUITestResults(runID)
 }
 
-func (a *App) GetScreenshotBase64(path string) (string, error) {
+func (a *App) GetUIScreenshot(runID, resultID string) (string, error) {
+	if a.dbManager == nil {
+		return "", fmt.Errorf("database not initialized")
+	}
+	path, err := a.dbManager.GetUITestScreenshotPath(runID, resultID)
+	if err != nil {
+		return "", err
+	}
 	if a.screenshotMgr == nil {
 		a.screenshotMgr = coreui.NewScreenshotManager()
+	}
+	if !a.screenshotMgr.IsManagedPath(path) {
+		return "", fmt.Errorf("invalid screenshot artifact")
 	}
 	return a.screenshotMgr.ReadScreenshotAsBase64(path)
 }
 
-func (a *App) InstallPlaywrightBrowsers() error {
+func (a *App) InstallPlaywrightBrowsers(browser string) error {
 	if a.uiEngine == nil {
 		a.uiEngine = coreui.NewBrowserEngine()
 	}
-	return a.uiEngine.InstallBrowsers()
+	return a.uiEngine.InstallBrowsers(coreui.BrowserType(browser))
 }

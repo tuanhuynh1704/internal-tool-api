@@ -1,10 +1,16 @@
 package main
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"internal-api-client/internal/security"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -41,20 +47,20 @@ type DBRequest struct {
 }
 
 type DBScenarioStep struct {
-	ID             string `json:"id"`
-	ScenarioID     string `json:"scenarioId"`
-	StepOrder      int    `json:"stepOrder"`
-	Name           string `json:"name"`
-	Method         string `json:"method"`
-	ApiPath        string `json:"apiPath"`
-	HeadersJson    string `json:"headersJson"`
-	ParamsJson     string `json:"paramsJson"`
-	Body           string `json:"body"`
-	BodyType       string `json:"bodyType"`
-	AuthType       string `json:"authType"`
-	AuthToken      string `json:"authToken"`
-	AuthConfigJson string `json:"authConfigJson"`
-	AssertionsJson string `json:"assertionsJson"`
+	ID              string `json:"id"`
+	ScenarioID      string `json:"scenarioId"`
+	StepOrder       int    `json:"stepOrder"`
+	Name            string `json:"name"`
+	Method          string `json:"method"`
+	ApiPath         string `json:"apiPath"`
+	HeadersJson     string `json:"headersJson"`
+	ParamsJson      string `json:"paramsJson"`
+	Body            string `json:"body"`
+	BodyType        string `json:"bodyType"`
+	AuthType        string `json:"authType"`
+	AuthToken       string `json:"authToken"`
+	AuthConfigJson  string `json:"authConfigJson"`
+	AssertionsJson  string `json:"assertionsJson"`
 	ExtractVarsJson string `json:"extractVarsJson"`
 }
 
@@ -105,10 +111,41 @@ type DBUITestResult struct {
 	ID             string `json:"id"`
 	RunID          string `json:"runId"`
 	StepID         string `json:"stepId"`
+	StepOrder      int    `json:"stepOrder"`
 	Status         string `json:"status"`
 	Error          string `json:"error"`
 	Duration       int64  `json:"duration"`
 	ScreenshotPath string `json:"screenshotPath"`
+	Details        string `json:"details"`
+}
+
+// DBScenarioTestRun and DBScenarioTestResult keep API automation results
+// independently from the UI test history so they can be viewed or exported
+// after the desktop session ends.
+type DBScenarioTestRun struct {
+	ID         string `json:"id"`
+	ScenarioID string `json:"scenarioId"`
+	Status     string `json:"status"`
+	StartedAt  string `json:"startedAt"`
+	FinishedAt string `json:"finishedAt"`
+	Duration   int64  `json:"duration"`
+}
+
+type DBScenarioTestResult struct {
+	ID               string `json:"id"`
+	RunID            string `json:"runId"`
+	StepID           string `json:"stepId"`
+	StepOrder        int    `json:"stepOrder"`
+	Status           string `json:"status"`
+	Duration         int64  `json:"duration"`
+	Method           string `json:"method"`
+	URL              string `json:"url"`
+	HTTPStatus       int    `json:"httpStatus"`
+	ResponseBody     string `json:"responseBody"`
+	ResponseHeaders  string `json:"responseHeaders"`
+	AssertionDetails string `json:"assertionDetails"`
+	ExtractedVars    string `json:"extractedVars"`
+	Error            string `json:"error"`
 }
 
 type DBEnvVariable struct {
@@ -128,6 +165,52 @@ type ProjectDataPayload struct {
 	Projects []DBProject `json:"projects"`
 	Folders  []DBFolder  `json:"folders"`
 	Requests []DBRequest `json:"requests"`
+}
+
+// PostmanImportResult is returned only after all imported rows are committed.
+type PostmanImportResult struct {
+	ProjectID        string `json:"projectId"`
+	ProjectName      string `json:"projectName"`
+	ImportedFolders  int    `json:"importedFolders"`
+	ImportedRequests int    `json:"importedRequests"`
+}
+
+type postmanCollection struct {
+	Info struct {
+		Name string `json:"name"`
+	} `json:"info"`
+	Item []postmanItem `json:"item"`
+}
+
+type postmanItem struct {
+	Name    string          `json:"name"`
+	Item    []postmanItem   `json:"item"`
+	Request json.RawMessage `json:"request"`
+}
+
+type postmanKeyValue struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Disabled bool   `json:"disabled"`
+}
+
+type postmanAuth struct {
+	Type   string            `json:"type"`
+	Bearer []postmanKeyValue `json:"bearer"`
+	Basic  []postmanKeyValue `json:"basic"`
+	APIKey []postmanKeyValue `json:"apikey"`
+}
+
+type postmanRequest struct {
+	Method string            `json:"method"`
+	Header []postmanKeyValue `json:"header"`
+	URL    json.RawMessage   `json:"url"`
+	Body   struct {
+		Mode       string            `json:"mode"`
+		Raw        string            `json:"raw"`
+		URLEncoded []postmanKeyValue `json:"urlencoded"`
+	} `json:"body"`
+	Auth postmanAuth `json:"auth"`
 }
 
 type DBManager struct {
@@ -150,6 +233,10 @@ func InitDB() (*DBManager, error) {
 	dbPath := getDBPath()
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		db.Close()
 		return nil, err
 	}
 
@@ -255,11 +342,39 @@ func InitDB() (*DBManager, error) {
 			id TEXT PRIMARY KEY,
 			run_id TEXT NOT NULL,
 			step_id TEXT NOT NULL,
+			step_order INTEGER NOT NULL DEFAULT 0,
 			status TEXT NOT NULL,
 			error TEXT DEFAULT '',
 			duration INTEGER DEFAULT 0,
 			screenshot_path TEXT DEFAULT '',
+			details TEXT DEFAULT '',
 			FOREIGN KEY(run_id) REFERENCES ui_test_runs(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS scenario_test_runs (
+			id TEXT PRIMARY KEY,
+			scenario_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			finished_at DATETIME,
+			duration INTEGER DEFAULT 0,
+			FOREIGN KEY(scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE
+		);`,
+		`CREATE TABLE IF NOT EXISTS scenario_test_results (
+			id TEXT PRIMARY KEY,
+			run_id TEXT NOT NULL,
+			step_id TEXT NOT NULL,
+			step_order INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			duration INTEGER DEFAULT 0,
+			method TEXT DEFAULT '',
+			url TEXT DEFAULT '',
+			http_status INTEGER DEFAULT 0,
+			response_body TEXT DEFAULT '',
+			response_headers TEXT DEFAULT '{}',
+			assertion_details TEXT DEFAULT '[]',
+			extracted_vars TEXT DEFAULT '{}',
+			error TEXT DEFAULT '',
+			FOREIGN KEY(run_id) REFERENCES scenario_test_runs(id) ON DELETE CASCADE
 		);`,
 	}
 
@@ -276,6 +391,10 @@ func InitDB() (*DBManager, error) {
 	_, _ = db.Exec("ALTER TABLE requests ADD COLUMN params_json TEXT DEFAULT '[]';")
 	_, _ = db.Exec("ALTER TABLE requests ADD COLUMN body_type TEXT DEFAULT 'json';")
 	_, _ = db.Exec("ALTER TABLE requests ADD COLUMN auth_config_json TEXT DEFAULT '{}';")
+	_, _ = db.Exec("ALTER TABLE ui_test_results ADD COLUMN step_order INTEGER NOT NULL DEFAULT 0;")
+	_, _ = db.Exec("ALTER TABLE ui_test_results ADD COLUMN details TEXT DEFAULT '';")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_ui_test_results_run_order ON ui_test_results(run_id, step_order);")
+	_, _ = db.Exec("CREATE INDEX IF NOT EXISTS idx_scenario_test_results_run_order ON scenario_test_results(run_id, step_order);")
 
 	return &DBManager{db: db}, nil
 }
@@ -379,6 +498,7 @@ func (m *DBManager) DeleteFolder(id string) error {
 	defer tx.Rollback()
 
 	folderIDs := []string{id}
+	visited := map[string]bool{id: true}
 	for i := 0; i < len(folderIDs); i++ {
 		currentID := folderIDs[i]
 		rows, err := tx.Query("SELECT id FROM folders WHERE parent_id = ?", currentID)
@@ -386,7 +506,10 @@ func (m *DBManager) DeleteFolder(id string) error {
 			for rows.Next() {
 				var subID string
 				if err := rows.Scan(&subID); err == nil {
-					folderIDs = append(folderIDs, subID)
+					if !visited[subID] {
+						visited[subID] = true
+						folderIDs = append(folderIDs, subID)
+					}
 				}
 			}
 			rows.Close()
@@ -520,6 +643,255 @@ func (m *DBManager) UpdateRequest(req DBRequest) error {
 func (m *DBManager) DeleteRequest(id string) error {
 	_, err := m.db.Exec("DELETE FROM requests WHERE id = ?", id)
 	return err
+}
+
+// ImportPostmanCollection validates and imports a Postman v2 collection in a
+// single transaction. Invalid input therefore cannot leave orphaned folders or
+// requests behind.
+func (m *DBManager) ImportPostmanCollection(collectionJSON string) (PostmanImportResult, error) {
+	var collection postmanCollection
+	if err := json.Unmarshal([]byte(collectionJSON), &collection); err != nil {
+		return PostmanImportResult{}, fmt.Errorf("parse Postman collection: %w", err)
+	}
+	if strings.TrimSpace(collection.Info.Name) == "" || len(collection.Item) == 0 {
+		return PostmanImportResult{}, fmt.Errorf("invalid Postman collection: missing info.name or item")
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return PostmanImportResult{}, err
+	}
+	defer tx.Rollback()
+
+	projectID, err := newImportID("proj")
+	if err != nil {
+		return PostmanImportResult{}, err
+	}
+	if _, err := tx.Exec("INSERT INTO projects (id, name) VALUES (?, ?)", projectID, collection.Info.Name); err != nil {
+		return PostmanImportResult{}, fmt.Errorf("create imported project: %w", err)
+	}
+
+	result := PostmanImportResult{ProjectID: projectID, ProjectName: collection.Info.Name}
+	var importItems func(items []postmanItem, parentID string) error
+	importItems = func(items []postmanItem, parentID string) error {
+		for _, item := range items {
+			if len(item.Item) > 0 {
+				folderID, err := newImportID("fold")
+				if err != nil {
+					return err
+				}
+				name := strings.TrimSpace(item.Name)
+				if name == "" {
+					name = "Untitled Folder"
+				}
+				var parentIDValue any
+				if parentID != "" {
+					parentIDValue = parentID
+				}
+				if _, err := tx.Exec("INSERT INTO folders (id, project_id, parent_id, name) VALUES (?, ?, ?, ?)", folderID, projectID, parentIDValue, name); err != nil {
+					return fmt.Errorf("create folder %q: %w", name, err)
+				}
+				result.ImportedFolders++
+				if err := importItems(item.Item, folderID); err != nil {
+					return err
+				}
+				continue
+			}
+
+			if len(item.Request) == 0 || string(item.Request) == "null" {
+				return fmt.Errorf("item %q has neither nested items nor a request", item.Name)
+			}
+			normalized, err := parsePostmanRequest(item.Request)
+			if err != nil {
+				return fmt.Errorf("parse request %q: %w", item.Name, err)
+			}
+			reqID, err := newImportID("req")
+			if err != nil {
+				return err
+			}
+			name := strings.TrimSpace(item.Name)
+			if name == "" {
+				name = "Untitled Request"
+			}
+			var folderIDValue any
+			if parentID != "" {
+				folderIDValue = parentID
+			}
+			encryptedToken, err := security.EncryptString(normalized.AuthToken)
+			if err != nil {
+				return fmt.Errorf("encrypt auth token: %w", err)
+			}
+			encryptedConfig, err := security.EncryptString(normalized.AuthConfigJSON)
+			if err != nil {
+				return fmt.Errorf("encrypt auth config: %w", err)
+			}
+			if _, err := tx.Exec(`INSERT INTO requests
+				(id, project_id, folder_id, name, method, base_url, port, use_port, api_path, req_body, headers_json, params_json, body_type, auth_type, auth_token, auth_config_json)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				reqID, projectID, folderIDValue, name, normalized.Method, normalized.BaseURL, normalized.Port, normalized.UsePort, normalized.APIPath, normalized.Body, normalized.HeadersJSON, "[]", normalized.BodyType, normalized.AuthType, encryptedToken, encryptedConfig,
+			); err != nil {
+				return fmt.Errorf("create request %q: %w", name, err)
+			}
+			result.ImportedRequests++
+		}
+		return nil
+	}
+
+	if err := importItems(collection.Item, ""); err != nil {
+		return PostmanImportResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PostmanImportResult{}, fmt.Errorf("commit Postman import: %w", err)
+	}
+	return result, nil
+}
+
+type normalizedPostmanRequest struct {
+	Method         string
+	BaseURL        string
+	Port           string
+	UsePort        int
+	APIPath        string
+	Body           string
+	HeadersJSON    string
+	BodyType       string
+	AuthType       string
+	AuthToken      string
+	AuthConfigJSON string
+}
+
+func parsePostmanRequest(raw json.RawMessage) (normalizedPostmanRequest, error) {
+	var request postmanRequest
+	var shorthandURL string
+	if err := json.Unmarshal(raw, &shorthandURL); err == nil {
+		request.Method = "GET"
+		request.URL, _ = json.Marshal(shorthandURL)
+	} else if err := json.Unmarshal(raw, &request); err != nil {
+		return normalizedPostmanRequest{}, err
+	}
+	if strings.TrimSpace(request.Method) == "" {
+		request.Method = "GET"
+	}
+	fullURL, err := parsePostmanURL(request.URL)
+	if err != nil {
+		return normalizedPostmanRequest{}, err
+	}
+	parsedURL, err := url.Parse(fullURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return normalizedPostmanRequest{}, fmt.Errorf("invalid URL %q", fullURL)
+	}
+
+	headers := make([]map[string]any, 0, len(request.Header))
+	for index, header := range request.Header {
+		if !header.Disabled && strings.TrimSpace(header.Key) != "" {
+			headers = append(headers, map[string]any{"id": fmt.Sprintf("import_header_%d", index), "key": header.Key, "value": header.Value, "enabled": true})
+		}
+	}
+	headersJSON, err := json.Marshal(headers)
+	if err != nil {
+		return normalizedPostmanRequest{}, fmt.Errorf("encode headers: %w", err)
+	}
+
+	body, bodyType := request.Body.Raw, "json"
+	switch request.Body.Mode {
+	case "urlencoded":
+		values := url.Values{}
+		for _, field := range request.Body.URLEncoded {
+			if !field.Disabled && strings.TrimSpace(field.Key) != "" {
+				values.Add(field.Key, field.Value)
+			}
+		}
+		body, bodyType = values.Encode(), "urlencoded"
+	case "":
+		bodyType = "none"
+	}
+
+	apiPath := parsedURL.EscapedPath()
+	if apiPath == "" {
+		apiPath = "/"
+	}
+	if parsedURL.RawQuery != "" {
+		apiPath += "?" + parsedURL.RawQuery
+	}
+	authType, authToken, authConfigJSON := parsePostmanAuth(request.Auth)
+	return normalizedPostmanRequest{
+		Method: request.Method, BaseURL: parsedURL.Scheme + "://" + parsedURL.Hostname(), Port: parsedURL.Port(),
+		UsePort: boolToInt(parsedURL.Port() != ""), APIPath: apiPath, Body: body, HeadersJSON: string(headersJSON),
+		BodyType: bodyType, AuthType: authType, AuthToken: authToken, AuthConfigJSON: authConfigJSON,
+	}, nil
+}
+
+func parsePostmanURL(raw json.RawMessage) (string, error) {
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil && strings.TrimSpace(asString) != "" {
+		return asString, nil
+	}
+	var asObject struct {
+		Raw      string            `json:"raw"`
+		Protocol string            `json:"protocol"`
+		Host     []string          `json:"host"`
+		Path     []string          `json:"path"`
+		Query    []postmanKeyValue `json:"query"`
+	}
+	if err := json.Unmarshal(raw, &asObject); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(asObject.Raw) != "" {
+		return asObject.Raw, nil
+	}
+	if asObject.Protocol == "" || len(asObject.Host) == 0 {
+		return "", fmt.Errorf("missing URL")
+	}
+	values := url.Values{}
+	for _, query := range asObject.Query {
+		if !query.Disabled && query.Key != "" {
+			values.Add(query.Key, query.Value)
+		}
+	}
+	result := asObject.Protocol + "://" + strings.Join(asObject.Host, ".") + "/" + strings.Join(asObject.Path, "/")
+	if encoded := values.Encode(); encoded != "" {
+		result += "?" + encoded
+	}
+	return result, nil
+}
+
+func parsePostmanAuth(auth postmanAuth) (string, string, string) {
+	values := func(items []postmanKeyValue) map[string]string {
+		result := make(map[string]string, len(items))
+		for _, item := range items {
+			result[item.Key] = item.Value
+		}
+		return result
+	}
+	switch auth.Type {
+	case "bearer":
+		return "bearer", values(auth.Bearer)["token"], "{}"
+	case "basic":
+		basic := values(auth.Basic)
+		config, _ := json.Marshal(map[string]string{"username": basic["username"], "password": basic["password"]})
+		return "basic", "", string(config)
+	case "apikey":
+		apiKey := values(auth.APIKey)
+		config, _ := json.Marshal(map[string]string{"apiKeyName": apiKey["key"], "apiKeyValue": apiKey["value"], "apiKeyAddTo": apiKey["in"]})
+		return "apikey", "", string(config)
+	default:
+		return "none", "", "{}"
+	}
+}
+
+func newImportID(prefix string) (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate %s ID: %w", prefix, err)
+	}
+	return prefix + "_" + hex.EncodeToString(bytes), nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // ==========================================
@@ -942,9 +1314,9 @@ func (m *DBManager) SaveUITestRun(run DBUITestRun, results []DBUITestResult) err
 
 	for _, res := range results {
 		_, err = tx.Exec(`
-			INSERT INTO ui_test_results (id, run_id, step_id, status, error, duration, screenshot_path)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, res.ID, run.ID, res.StepID, res.Status, res.Error, res.Duration, res.ScreenshotPath)
+			INSERT INTO ui_test_results (id, run_id, step_id, step_order, status, error, duration, screenshot_path, details)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, res.ID, run.ID, res.StepID, res.StepOrder, res.Status, res.Error, res.Duration, res.ScreenshotPath, res.Details)
 		if err != nil {
 			return err
 		}
@@ -978,10 +1350,10 @@ func (m *DBManager) GetUITestRuns(scenarioID string) ([]DBUITestRun, error) {
 
 func (m *DBManager) GetUITestResults(runID string) ([]DBUITestResult, error) {
 	rows, err := m.db.Query(`
-		SELECT id, run_id, step_id, status, error, duration, screenshot_path
+		SELECT id, run_id, step_id, step_order, status, error, duration, screenshot_path, details
 		FROM ui_test_results
 		WHERE run_id = ?
-		ORDER BY id ASC
+		ORDER BY step_order ASC, id ASC
 	`, runID)
 	if err != nil {
 		return nil, err
@@ -991,9 +1363,66 @@ func (m *DBManager) GetUITestResults(runID string) ([]DBUITestResult, error) {
 	var results []DBUITestResult
 	for rows.Next() {
 		var res DBUITestResult
-		if err := rows.Scan(&res.ID, &res.RunID, &res.StepID, &res.Status, &res.Error, &res.Duration, &res.ScreenshotPath); err == nil {
+		if err := rows.Scan(&res.ID, &res.RunID, &res.StepID, &res.StepOrder, &res.Status, &res.Error, &res.Duration, &res.ScreenshotPath, &res.Details); err == nil {
 			results = append(results, res)
 		}
 	}
 	return results, nil
+}
+
+func (m *DBManager) GetUITestScreenshotPath(runID, resultID string) (string, error) {
+	var path string
+	err := m.db.QueryRow(`SELECT screenshot_path FROM ui_test_results WHERE run_id = ? AND id = ?`, runID, resultID).Scan(&path)
+	return path, err
+}
+
+func (m *DBManager) SaveScenarioTestRun(run DBScenarioTestRun, results []DBScenarioTestResult) error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`INSERT INTO scenario_test_runs (id, scenario_id, status, started_at, finished_at, duration) VALUES (?, ?, ?, ?, ?, ?)`, run.ID, run.ScenarioID, run.Status, run.StartedAt, run.FinishedAt, run.Duration); err != nil {
+		return err
+	}
+	for _, result := range results {
+		if _, err = tx.Exec(`INSERT INTO scenario_test_results (id, run_id, step_id, step_order, status, duration, method, url, http_status, response_body, response_headers, assertion_details, extracted_vars, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, result.ID, result.RunID, result.StepID, result.StepOrder, result.Status, result.Duration, result.Method, result.URL, result.HTTPStatus, result.ResponseBody, result.ResponseHeaders, result.AssertionDetails, result.ExtractedVars, result.Error); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (m *DBManager) GetScenarioTestRuns(scenarioID string) ([]DBScenarioTestRun, error) {
+	rows, err := m.db.Query(`SELECT id, scenario_id, status, started_at, COALESCE(finished_at, ''), duration FROM scenario_test_runs WHERE scenario_id = ? ORDER BY started_at DESC LIMIT 50`, scenarioID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var runs []DBScenarioTestRun
+	for rows.Next() {
+		var run DBScenarioTestRun
+		if err := rows.Scan(&run.ID, &run.ScenarioID, &run.Status, &run.StartedAt, &run.FinishedAt, &run.Duration); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
+func (m *DBManager) GetScenarioTestResults(runID string) ([]DBScenarioTestResult, error) {
+	rows, err := m.db.Query(`SELECT id, run_id, step_id, step_order, status, duration, method, url, http_status, response_body, response_headers, assertion_details, extracted_vars, error FROM scenario_test_results WHERE run_id = ? ORDER BY step_order ASC, id ASC`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []DBScenarioTestResult
+	for rows.Next() {
+		var result DBScenarioTestResult
+		if err := rows.Scan(&result.ID, &result.RunID, &result.StepID, &result.StepOrder, &result.Status, &result.Duration, &result.Method, &result.URL, &result.HTTPStatus, &result.ResponseBody, &result.ResponseHeaders, &result.AssertionDetails, &result.ExtractedVars, &result.Error); err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, rows.Err()
 }

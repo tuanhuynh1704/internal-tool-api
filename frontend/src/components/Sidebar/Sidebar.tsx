@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { main } from '../../../wailsjs/go/models';
-import { GetAppInfo } from '../../../wailsjs/go/main/App';
+import { GetAppInfo, ImportPostmanCollection } from '../../../wailsjs/go/main/App';
 import { BrowserOpenURL } from '../../../wailsjs/runtime/runtime';
 import appLogo from '../../assets/images/logo.png';
 
@@ -146,32 +146,13 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
         const text = event.target?.result as string;
         const parsed = JSON.parse(text);
 
-        // Check if Postman Collection v2.1
+        // Import the complete collection in the backend as a single transaction.
+        // It generates every project/folder/request ID and keeps the hierarchy intact.
         if (parsed.info && parsed.item) {
-          const projName = parsed.info.name || 'Postman Collection';
-          const projId = 'proj_' + Date.now();
-          await createProject(projName);
-
-          // Helper to recursively parse Postman items
-          const parsePostmanItems = async (items: any[], parentFolderId: string) => {
-            for (const it of items) {
-              if (it.item && Array.isArray(it.item)) {
-                // Folder
-                const folderId = 'fold_' + Date.now() + Math.random().toString();
-                await createFolder(projId, parentFolderId, it.name || 'Folder');
-                await parsePostmanItems(it.item, folderId);
-              } else if (it.request) {
-                // Request
-                const reqMethod = it.request.method || 'GET';
-                const reqName = it.name || 'Request';
-                await createRequest(projId, parentFolderId, reqName, reqMethod);
-              }
-            }
-          };
-
-          await parsePostmanItems(parsed.item, '');
+          const result = await ImportPostmanCollection(JSON.stringify(parsed));
           await refreshWorkspaceData();
-          alert(`✓ Đã nhập thành công Postman Collection: ${projName}`);
+          setActiveProjId(result.projectId);
+          alert(`✓ Đã nhập ${result.importedRequests} request và ${result.importedFolders} thư mục từ Postman Collection: ${result.projectName}`);
         } else {
           alert("Tệp JSON không tương thích hoặc chưa hỗ trợ cấu trúc này.");
         }

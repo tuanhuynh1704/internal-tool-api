@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -35,14 +36,37 @@ func (sm *ScreenshotManager) GenerateScreenshotPath(scenarioID, stepID string) s
 	return filepath.Join(sm.baseDir, fileName)
 }
 
+func (sm *ScreenshotManager) GenerateTracePath(scenarioID, runID string) string {
+	timestamp := time.Now().Format("20060102_150405_000")
+	return filepath.Join(sm.baseDir, fmt.Sprintf("trace_%s_%s_%s.zip", sanitizeFileName(scenarioID), sanitizeFileName(runID), timestamp))
+}
+
 // ReadScreenshotAsBase64 reads a screenshot image and encodes it to base64 data URI
 func (sm *ScreenshotManager) ReadScreenshotAsBase64(filePath string) (string, error) {
+	if !sm.IsManagedPath(filePath) {
+		return "", fmt.Errorf("screenshot path is outside the managed artifact directory")
+	}
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", err
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	return "data:image/png;base64," + encoded, nil
+}
+
+// IsManagedPath prevents a Wails caller from using the screenshot helper as a
+// generic local-file reader. Only artifacts created under baseDir are accepted.
+func (sm *ScreenshotManager) IsManagedPath(filePath string) bool {
+	base, err := filepath.Abs(sm.baseDir)
+	if err != nil {
+		return false
+	}
+	candidate, err := filepath.Abs(filePath)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(base, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 func sanitizeFileName(name string) string {

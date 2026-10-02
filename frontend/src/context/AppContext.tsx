@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { 
     ExecuteRequest, 
     ExecuteStreamRequest,
@@ -183,6 +183,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const [environments, setEnvironments] = useState<Environment[]>([]);
     const [activeEnvId, setActiveEnvId] = useState<string>('none');
+    const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
     const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0] || null;
 
@@ -323,6 +324,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const saveTabToDB = async (tab: ApiTab) => {
         try {
+            const storedBody = tab.bodyType === 'urlencoded'
+                ? JSON.stringify(tab.urlEncodedList || [])
+                : tab.bodyType === 'formdata'
+                    ? JSON.stringify(tab.formDataList || [])
+                    : tab.reqBody;
             await UpdateRequestInDB({
                 id: tab.id,
                 projectId: tab.projectId,
@@ -333,7 +339,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 port: tab.port,
                 usePort: tab.usePort,
                 apiPath: tab.apiPath,
-                reqBody: tab.reqBody,
+                reqBody: storedBody,
                 headersJson: JSON.stringify(tab.headersList),
                 paramsJson: JSON.stringify(tab.paramsList),
                 bodyType: tab.bodyType || 'json',
@@ -367,7 +373,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTabs(prev => prev.map(t => {
             if (t.id === activeTabId) {
                 const newTab = { ...t, ...fields };
-                saveTabToDB(newTab);
+				const previous = saveTimers.current.get(newTab.id);
+				if (previous) clearTimeout(previous);
+				saveTimers.current.set(newTab.id, setTimeout(() => {
+					saveTimers.current.delete(newTab.id);
+					void saveTabToDB(newTab);
+				}, 350));
                 return newTab;
             }
             return t;
@@ -446,6 +457,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             parsedAuthConfig = {};
         }
 
+        let urlEncodedList: KeyValueRow[] = [];
+        let formDataList: FormDataRow[] = [];
+        if (req.bodyType === 'urlencoded') {
+            try { urlEncodedList = JSON.parse(req.reqBody || '[]'); } catch {
+                urlEncodedList = Array.from(new URLSearchParams(req.reqBody || '')).map(([key, value], index) => ({ id: `legacy_url_${index}`, key, value, enabled: true }));
+            }
+        } else if (req.bodyType === 'formdata') {
+            try { formDataList = JSON.parse(req.reqBody || '[]'); } catch { formDataList = []; }
+        }
+
         const newTab: ApiTab = {
             id: req.id,
             projectId: req.projectId,
@@ -457,10 +478,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             usePort: !!req.usePort,
             apiPath: req.apiPath || '',
             paramsList: parsedParams,
-            reqBody: req.reqBody || '',
+            reqBody: ['urlencoded', 'formdata'].includes(req.bodyType) ? '' : (req.reqBody || ''),
             bodyType: (req.bodyType as any) || 'json',
-            urlEncodedList: [],
-            formDataList: [],
+            urlEncodedList,
+            formDataList,
             headersList: parsedHeaders,
             authType: (req.authType as any) || 'none',
             authToken: req.authToken || '',
@@ -502,7 +523,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
 
     const createProject = async (name: string) => {
-        const id = 'proj_' + Date.now();
+        const id = 'proj_' + crypto.randomUUID();
         await CreateProjectInDB(id, name);
         await refreshWorkspaceData();
     };
@@ -519,7 +540,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
 
     const createFolder = async (projectId: string, parentId: string, name: string) => {
-        const id = 'fold_' + Date.now();
+        const id = 'fold_' + crypto.randomUUID();
         await CreateFolderInDB(id, projectId, parentId, name);
         await refreshWorkspaceData();
     };
@@ -535,7 +556,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
 
     const createRequest = async (projectId: string, folderId: string, name: string, method: string) => {
-        const id = 'req_' + Date.now();
+        const id = 'req_' + crypto.randomUUID();
         await CreateRequestInDB(id, projectId, folderId, name, method);
         await refreshWorkspaceData();
         
@@ -589,12 +610,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const currentEnv = environments.find(e => e.id === activeEnvId);
         if (!currentEnv) return text;
 
-        let result = text;
-        currentEnv.variables.filter(v => v.enabled && v.key.trim() !== '').forEach(v => {
-            const regex = new RegExp(`{{\\s*${v.key.trim()}\\s*}}`, 'g');
-            result = result.replace(regex, v.value);
-        });
-        return result;
+        const values = new Map(currentEnv.variables
+            .filter(v => v.enabled && v.key.trim() !== '')
+            .map(v => [v.key.trim(), v.value]));
+        // Capture placeholders once instead of compiling user-provided keys as regex.
+        return text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, key) => values.has(key.trim()) ? values.get(key.trim())! : match);
     };
 
     const buildFullUrl = (tab: ApiTab): string => {
@@ -613,7 +633,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             path = '/' + path;
         }
 
-        return `${base}${portPart}${path}`;
+        let fullUrl = `${base}${portPart}${path}`;
+        if (tab.authType === 'apikey' && tab.authConfig?.apiKeyAddTo === 'query' && tab.authConfig.apiKeyName) {
+            const key = parseEnvVariables(tab.authConfig.apiKeyName.trim());
+            const value = parseEnvVariables(tab.authConfig.apiKeyValue?.trim() || '');
+            if (key) {
+                const separator = fullUrl.includes('?') ? '&' : '?';
+                fullUrl += `${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+            }
+        }
+        return fullUrl;
     };
 
     const getMappedHeaders = (tab: ApiTab): Record<string, string> => {
@@ -650,6 +679,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             });
             return params.toString();
         }
+		if (tab.bodyType === 'formdata') {
+			return JSON.stringify((tab.formDataList || []).filter(item => item.enabled && item.key.trim() !== '').map(item => ({
+				...item,
+				key: parseEnvVariables(item.key.trim()),
+				value: parseEnvVariables(item.value)
+			})));
+		}
         return parseEnvVariables(tab.reqBody);
     };
 

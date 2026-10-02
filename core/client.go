@@ -2,11 +2,17 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptrace"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -111,21 +117,40 @@ func NewHttpClientEngine(allowInsecure bool, timeoutSec int) *HttpClientEngine {
 }
 
 func (e *HttpClientEngine) Execute(payload RequestPayload) (ResponsePayload, error) {
+	return e.execute(context.Background(), payload)
+}
+
+// ExecuteWithContext executes one request with caller-controlled cancellation.
+// Automation runs use this instead of Execute so a stopped scenario interrupts
+// the in-flight HTTP request instead of waiting for the client timeout.
+func (e *HttpClientEngine) ExecuteWithContext(ctx context.Context, payload RequestPayload) (ResponsePayload, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return e.execute(ctx, payload)
+}
+
+// execute keeps the public single-request API while allowing load-test workers
+// to cancel in-flight HTTP I/O through their run context.
+func (e *HttpClientEngine) execute(ctx context.Context, payload RequestPayload) (ResponsePayload, error) {
 	var resPayload ResponsePayload
 	resPayload.Headers = make(map[string]string)
 
-	var bodyReader io.Reader
-	if payload.Body != "" {
-		bodyReader = strings.NewReader(payload.Body)
+	bodyReader, generatedContentType, err := requestBody(payload)
+	if err != nil {
+		return resPayload, err
 	}
 
-	req, err := http.NewRequest(payload.Method, payload.URL, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, payload.Method, payload.URL, bodyReader)
 	if err != nil {
 		return resPayload, err
 	}
 
 	for k, v := range payload.Headers {
 		req.Header.Set(k, v)
+	}
+	if generatedContentType != "" && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", generatedContentType)
 	}
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", "InternalApiClient-Go/2.0")
@@ -267,6 +292,12 @@ func (e *HttpClientEngine) ExecuteStressTestWithProgress(
 	targetRPS int,
 	onTick func(StressTestTick),
 ) StressTestResult {
+	if concurrency < 1 || durationSec < 0 || totalRequests < 0 || targetRPS < 0 {
+		return StressTestResult{FailureCount: 1}
+	}
+	if targetRPS > 1_000_000_000 { // time.NewTicker would panic at sub-nanosecond intervals
+		return StressTestResult{FailureCount: 1}
+	}
 	e.stressMu.Lock()
 	ctx, cancel := context.WithCancel(context.Background())
 	if durationSec > 0 {
@@ -296,11 +327,17 @@ func (e *HttpClientEngine) ExecuteStressTestWithProgress(
 
 	var jobs chan struct{}
 	if !useDuration {
-		jobs = make(chan struct{}, totalRequests)
-		for i := 0; i < totalRequests; i++ {
-			jobs <- struct{}{}
-		}
-		close(jobs)
+		jobs = make(chan struct{}, concurrency)
+		go func() {
+			defer close(jobs)
+			for i := 0; i < totalRequests; i++ {
+				select {
+				case jobs <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
 	}
 
 	var delayPerThread time.Duration
@@ -378,20 +415,20 @@ func (e *HttpClientEngine) ExecuteStressTestWithProgress(
 				for {
 					select {
 					case <-ctx.Done():
-						isCancelled.Store(true)
+						isCancelled.Store(ctx.Err() == context.Canceled)
 						return
 					default:
 						if rateLimiter != nil {
 							select {
 							case <-rateLimiter:
 							case <-ctx.Done():
-								isCancelled.Store(true)
+								isCancelled.Store(ctx.Err() == context.Canceled)
 								return
 							}
 						}
 
 						atomic.AddInt64(&actualTotalRequests, 1)
-						res, err := e.Execute(payload)
+						res, err := e.execute(ctx, payload)
 						if err != nil || res.Status >= 400 {
 							atomic.AddInt64(&failureCount, 1)
 						} else {
@@ -409,19 +446,19 @@ func (e *HttpClientEngine) ExecuteStressTestWithProgress(
 				for range jobs {
 					select {
 					case <-ctx.Done():
-						isCancelled.Store(true)
+						isCancelled.Store(ctx.Err() == context.Canceled)
 						return
 					default:
 						if rateLimiter != nil {
 							select {
 							case <-rateLimiter:
 							case <-ctx.Done():
-								isCancelled.Store(true)
+								isCancelled.Store(ctx.Err() == context.Canceled)
 								return
 							}
 						}
 						atomic.AddInt64(&actualTotalRequests, 1)
-						res, err := e.Execute(payload)
+						res, err := e.execute(ctx, payload)
 						if err != nil || res.Status >= 400 {
 							atomic.AddInt64(&failureCount, 1)
 						} else {
@@ -566,4 +603,52 @@ func (e *HttpClientEngine) ExecuteStream(ctx context.Context, payload RequestPay
 			}
 		}
 	}
+}
+
+type formDataField struct {
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Enabled  bool   `json:"enabled"`
+	Type     string `json:"type"`
+	FilePath string `json:"filePath"`
+}
+
+func requestBody(payload RequestPayload) (io.Reader, string, error) {
+	if payload.BodyType != "formdata" {
+		if payload.Body == "" {
+			return nil, "", nil
+		}
+		return strings.NewReader(payload.Body), "", nil
+	}
+	var fields []formDataField
+	if err := json.Unmarshal([]byte(payload.Body), &fields); err != nil {
+		return nil, "", fmt.Errorf("parse form-data fields: %w", err)
+	}
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+	for _, field := range fields {
+		if !field.Enabled || strings.TrimSpace(field.Key) == "" {
+			continue
+		}
+		if field.Type == "file" {
+			file, err := os.Open(field.FilePath)
+			if err != nil {
+				return nil, "", fmt.Errorf("open form-data file %q: %w", field.FilePath, err)
+			}
+			part, err := writer.CreateFormFile(field.Key, filepath.Base(field.FilePath))
+			if err == nil {
+				_, err = io.Copy(part, file)
+			}
+			file.Close()
+			if err != nil {
+				return nil, "", fmt.Errorf("write form-data file %q: %w", field.FilePath, err)
+			}
+		} else if err := writer.WriteField(field.Key, field.Value); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return &buffer, writer.FormDataContentType(), nil
 }

@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp, HeaderPair, ParamPair, KeyValueRow } from '../../context/AppContext';
 import { Editor } from '@monaco-editor/react';
 import { parseCurl, generateCodeSnippet, generateCurlSnippet } from '../../utils/curlParser';
 import { AssertionRule } from '../../utils/excelScenarioHelper';
+import useEscapeKey from '../../hooks/useEscapeKey';
 
 interface RequestPanelProps {
   onOpenStressModal?: () => void;
@@ -37,6 +38,27 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
   const [selectedLang, setSelectedLang] = useState<'curl' | 'fetch' | 'axios' | 'python' | 'go' | 'nodejs'>('curl');
   const [copiedSnippet, setCopiedSnippet] = useState(false);
+  const [isToolsDropdownOpen, setIsToolsDropdownOpen] = useState(false);
+  const toolsDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (toolsDropdownRef.current && !toolsDropdownRef.current.contains(event.target as Node)) {
+        setIsToolsDropdownOpen(false);
+      }
+    };
+    if (isToolsDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isToolsDropdownOpen]);
+
+  // Close overlays on Escape key in LIFO order
+  useEscapeKey(() => setIsToolsDropdownOpen(false), isToolsDropdownOpen);
+  useEscapeKey(() => setIsImportCurlOpen(false), isImportCurlOpen);
+  useEscapeKey(() => setIsCodeModalOpen(false), isCodeModalOpen);
 
   // Helper to resolve environment variables in text
   const resolveEnv = (text: string): string => {
@@ -64,6 +86,8 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
       case 'PUT': return 'var(--method-put)';
       case 'DELETE': return 'var(--method-delete)';
       case 'PATCH': return 'var(--method-patch)';
+      case 'HEAD': return 'var(--method-head)';
+      case 'OPTIONS': return 'var(--method-options)';
       default: return 'var(--text-main)';
     }
   };
@@ -301,95 +325,90 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
       flexDirection: 'column',
       gap: '10px'
     }}>
-      {/* Top Bar: Title, Import cURL, Code Snippets & Environment Selector */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+      {/* Top Bar: Title, Environment Selector, cURL & Snippets, Testing Studio */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '10px'
+      }}>
+        {/* Left: Title & Shortcut Hint */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-primary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Request Builder
-          </span>
-          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-            (Ctrl+Enter để gửi ⚡)
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'rgba(56, 189, 248, 0.08)',
+            border: '1px solid rgba(56, 189, 248, 0.2)',
+            padding: '3px 8px',
+            borderRadius: '6px'
+          }}>
+            <span style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              background: 'var(--color-primary)',
+              boxShadow: '0 0 8px var(--color-primary)'
+            }} />
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              color: 'var(--color-primary)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.6px'
+            }}>
+              Request Builder
+            </span>
+          </div>
+
+          <span style={{
+            fontSize: '11px',
+            color: 'var(--text-dim)',
+            background: 'var(--bg-app)',
+            padding: '2px 6px',
+            borderRadius: '4px',
+            border: '1px solid var(--border-subtle)',
+            fontFamily: 'var(--font-mono)'
+          }}>
+            Ctrl + Enter ⚡
           </span>
         </div>
 
-        {/* Action Buttons: Import cURL, Code Snippets, Environment */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
-          {/* Import cURL button */}
-          <button
-            type="button"
-            onClick={() => setIsImportCurlOpen(true)}
-            style={{
-              padding: '3px 8px',
-              background: 'var(--bg-app)',
-              border: '1px solid var(--border-card)',
-              color: '#38bdf8',
-              borderRadius: '6px',
+        {/* Right: Grouped Controls (Environment, Actions, Testing Tools) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          
+          {/* Group 1: Environment Selector */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            background: 'var(--bg-app)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: '6px',
+            padding: '2px 4px'
+          }}>
+            <span style={{
               fontSize: '11px',
-              fontWeight: 600,
+              color: activeEnvId !== 'none' ? '#10b981' : 'var(--text-dim)',
               display: 'flex',
               alignItems: 'center',
-              gap: '4px'
-            }}
-            title="Dán lệnh cURL để tự động nhập cấu hình"
-          >
-            <span>📥</span> Import cURL
-          </button>
-
-          {/* Quick Copy cURL */}
-          <button
-            type="button"
-            onClick={handleQuickCopyCurl}
-            style={{
-              padding: '3px 8px',
-              background: 'var(--bg-app)',
-              border: '1px solid var(--border-card)',
-              color: 'var(--text-muted)',
-              borderRadius: '6px',
-              fontSize: '11px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px'
-            }}
-            title="Sao chép request dưới dạng cURL"
-          >
-            <span>📋</span> Copy cURL
-          </button>
-
-          {/* Code Snippets Modal Button */}
-          <button
-            type="button"
-            onClick={() => setIsCodeModalOpen(true)}
-            style={{
-              padding: '3px 8px',
-              background: 'var(--bg-app)',
-              border: '1px solid var(--border-card)',
-              color: '#a78bfa',
-              borderRadius: '6px',
-              fontSize: '11px',
-              fontWeight: 600,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px'
-            }}
-            title="Sinh mã nguồn Python, Go, JS Axios..."
-          >
-            <span>💻</span> Code
-          </button>
-
-          {/* Environment Quick Switch */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '6px' }}>
-            <span style={{ color: 'var(--text-muted)', fontWeight: 600, fontSize: '11px' }}>ENV:</span>
+              paddingLeft: '4px'
+            }}>
+              🌐
+            </span>
             <select 
               value={activeEnvId} 
               onChange={(e) => setActiveEnvId(e.target.value)}
               style={{
-                padding: '3px 6px',
-                background: 'var(--bg-input)',
-                color: 'var(--color-primary)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: '6px',
+                padding: '2px 6px',
+                background: 'transparent',
+                color: activeEnvId !== 'none' ? 'var(--text-main)' : 'var(--text-muted)',
+                border: 'none',
                 fontWeight: 600,
-                fontSize: '11px'
+                fontSize: '11px',
+                cursor: 'pointer',
+                outline: 'none'
               }}
             >
               <option value="none">Không dùng môi trường</option>
@@ -403,30 +422,248 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                 onClick={onOpenEnvModal}
                 title="Quản lý biến môi trường"
                 style={{
-                  background: 'var(--bg-app)',
-                  border: '1px solid var(--border-card)',
+                  background: 'transparent',
+                  border: 'none',
                   color: 'var(--text-muted)',
-                  borderRadius: '6px',
-                  padding: '3px 6px',
-                  fontSize: '11px'
+                  borderRadius: '4px',
+                  padding: '2px 4px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center'
                 }}
               >
                 ⚙️
               </button>
             )}
           </div>
+
+          <div style={{ width: '1px', height: '18px', background: 'var(--border-subtle)' }} />
+
+          {/* Group 2: cURL & Code Tools */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: 'var(--bg-app)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: '6px',
+            overflow: 'hidden'
+          }}>
+            <button
+              type="button"
+              onClick={() => setIsImportCurlOpen(true)}
+              style={{
+                padding: '4px 8px',
+                background: 'transparent',
+                border: 'none',
+                color: '#38bdf8',
+                fontSize: '11px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer'
+              }}
+              title="Dán lệnh cURL để tự động nhập cấu hình"
+            >
+              <span>📥</span> Import
+            </button>
+            <div style={{ width: '1px', height: '14px', background: 'var(--border-subtle)' }} />
+            <button
+              type="button"
+              onClick={handleQuickCopyCurl}
+              style={{
+                padding: '4px 8px',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-muted)',
+                fontSize: '11px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer'
+              }}
+              title="Sao chép request dưới dạng cURL"
+            >
+              <span>📋</span> Copy cURL
+            </button>
+            <div style={{ width: '1px', height: '14px', background: 'var(--border-subtle)' }} />
+            <button
+              type="button"
+              onClick={() => setIsCodeModalOpen(true)}
+              style={{
+                padding: '4px 8px',
+                background: 'transparent',
+                border: 'none',
+                color: '#a78bfa',
+                fontSize: '11px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer'
+              }}
+              title="Sinh mã nguồn Python, Go, JS Axios..."
+            >
+              <span>💻</span> Code
+            </button>
+          </div>
+
+          {/* Group 3: Test & Studio Tools Dropdown */}
+          <div style={{ position: 'relative' }} ref={toolsDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setIsToolsDropdownOpen(!isToolsDropdownOpen)}
+              style={{
+                padding: '4px 10px',
+                background: isToolsDropdownOpen ? 'var(--bg-active)' : 'var(--bg-app)',
+                border: isToolsDropdownOpen ? '1px solid var(--color-primary)' : '1px solid var(--border-subtle)',
+                color: isToolsDropdownOpen ? 'var(--color-primary)' : 'var(--text-main)',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
+              title="Công cụ kiểm thử nâng cao: Auto Test, Mock Server, Đo Tải..."
+            >
+              <span>🧪</span>
+              <span>Kiểm thử & Tools</span>
+              <span style={{ fontSize: '9px', opacity: 0.7, transform: isToolsDropdownOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}>▼</span>
+            </button>
+
+            {/* Dropdown Popover */}
+            {isToolsDropdownOpen && (
+              <div style={{
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                right: 0,
+                zIndex: 100,
+                width: '270px',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-card)',
+                borderRadius: '8px',
+                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 1px 1px rgba(255, 255, 255, 0.05)',
+                padding: '6px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '4px'
+              }}>
+                <div style={{ padding: '4px 8px', fontSize: '10px', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Bộ công cụ Studio & Test
+                </div>
+
+                {onOpenAutomationModal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsToolsDropdownOpen(false);
+                      onOpenAutomationModal();
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px',
+                      padding: '8px 10px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderRadius: '6px',
+                      color: 'var(--text-main)',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      transition: 'background 0.12s ease'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.12)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span style={{ fontSize: '16px', lineHeight: 1 }}>🤖</span>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#38bdf8' }}>Auto Test Studio</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>Chạy kịch bản tự động theo luồng</div>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenMockModal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsToolsDropdownOpen(false);
+                      onOpenMockModal();
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px',
+                      padding: '8px 10px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderRadius: '6px',
+                      color: 'var(--text-main)',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      transition: 'background 0.12s ease'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(168, 85, 247, 0.12)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span style={{ fontSize: '16px', lineHeight: 1 }}>🎭</span>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#c084fc' }}>Mock API Server</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>Giả lập endpoint API & dữ liệu mẫu</div>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenStressModal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsToolsDropdownOpen(false);
+                      onOpenStressModal();
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px',
+                      padding: '8px 10px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderRadius: '6px',
+                      color: 'var(--text-main)',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      transition: 'background 0.12s ease'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span style={{ fontSize: '16px', lineHeight: 1 }}>⚡</span>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#f87171' }}>Đo Tải (Stress Test)</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>Kiểm thử tải đồng thời Goroutines</div>
+                    </div>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
         </div>
       </div>
 
-      {/* Main Omnibar (Method + Base URL + Port + Path + Actions) */}
+      {/* Main Omnibar (Method + Base URL + Port + Path + Execution Actions) */}
       <div style={{
         display: 'flex',
-        alignItems: 'stretch',
-        gap: '6px',
+        alignItems: 'center',
+        gap: '8px',
         background: 'var(--bg-input)',
-        padding: '4px',
+        padding: '5px',
         borderRadius: '8px',
-        border: '1px solid var(--border-card)'
+        border: '1px solid var(--border-card)',
+        transition: 'border-color 0.15s ease, box-shadow 0.15s ease'
       }}>
         {/* Method Picker */}
         <select 
@@ -440,7 +677,9 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
             fontSize: '13px',
             border: '1px solid var(--border-card)',
             borderRadius: '6px',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            outline: 'none',
+            flexShrink: 0
           }}
         >
           <option value="GET">GET</option>
@@ -452,11 +691,23 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
           <option value="OPTIONS">OPTIONS</option>
         </select>
 
-        {/* Base URL */}
-        <div style={{ flex: 2, display: 'flex' }}>
+        {/* Base URL Segment */}
+        <div style={{
+          flex: 1.2,
+          display: 'flex',
+          alignItems: 'center',
+          background: 'var(--bg-card)',
+          borderRadius: '6px',
+          border: '1px solid var(--border-subtle)',
+          padding: '0 8px',
+          minWidth: '180px'
+        }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontWeight: 600, marginRight: '4px', userSelect: 'none' }}>
+            Base:
+          </span>
           <input 
             type="text" 
-            placeholder="Base URL: https://api.mysite.com hoặc {{base_url}}"
+            placeholder="https://api.mysite.com hoặc {{base_url}}"
             value={activeTab.baseUrl} 
             onChange={(e) => updateActiveTab({ baseUrl: e.target.value })} 
             style={{
@@ -465,54 +716,116 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
               background: 'transparent',
               color: 'var(--color-primary)',
               fontFamily: 'var(--font-mono)',
-              fontSize: '13px',
-              padding: '8px 10px'
+              fontSize: '12.5px',
+              padding: '7px 4px',
+              outline: 'none'
             }}
           />
         </div>
 
-        {/* Port Segment */}
+        {/* Port Segment - Smart Pill */}
+        {activeTab.usePort ? (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            background: 'rgba(245, 158, 11, 0.1)',
+            border: '1px solid rgba(245, 158, 11, 0.3)',
+            borderRadius: '6px',
+            padding: '2px 6px',
+            gap: '2px',
+            flexShrink: 0
+          }}>
+            <span style={{ color: '#f59e0b', fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '12px' }}>:</span>
+            <input 
+              type="text" 
+              placeholder="Port"
+              value={activeTab.port} 
+              onChange={(e) => updateActiveTab({ port: e.target.value })} 
+              autoFocus
+              style={{
+                width: '48px',
+                padding: '4px 2px',
+                background: 'transparent',
+                border: 'none',
+                color: '#f59e0b',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '12px',
+                fontWeight: 600,
+                textAlign: 'center',
+                outline: 'none'
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => updateActiveTab({ usePort: false })}
+              title="Tắt Port"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-dim)',
+                cursor: 'pointer',
+                fontSize: '11px',
+                padding: '0 2px',
+                display: 'flex',
+                alignItems: 'center'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.color = '#ef4444'}
+              onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-dim)'}
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => updateActiveTab({ usePort: true })}
+            title="Thêm Port kết nối (:8080)"
+            style={{
+              padding: '6px 8px',
+              background: 'transparent',
+              border: '1px dashed var(--border-card)',
+              borderRadius: '6px',
+              color: 'var(--text-dim)',
+              fontSize: '11px',
+              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '2px',
+              whiteSpace: 'nowrap',
+              flexShrink: 0
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--color-primary)';
+              e.currentTarget.style.color = 'var(--color-primary)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--border-card)';
+              e.currentTarget.style.color = 'var(--text-dim)';
+            }}
+          >
+            <span>+</span>
+            <span>:Port</span>
+          </button>
+        )}
+
+        {/* Endpoint Path & Query */}
         <div style={{
+          flex: 2,
           display: 'flex',
           alignItems: 'center',
-          gap: '4px',
           background: 'var(--bg-card)',
-          padding: '0 8px',
           borderRadius: '6px',
-          border: '1px solid var(--border-card)'
+          border: '1px solid var(--border-subtle)',
+          padding: '0 8px',
+          minWidth: '220px'
         }}>
-          <input 
-            type="checkbox" 
-            title="Bật/Tắt cổng Port"
-            checked={activeTab.usePort}
-            onChange={(e) => updateActiveTab({ usePort: e.target.checked })}
-            style={{ cursor: 'pointer' }}
-          />
-          <span style={{ color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>:</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontWeight: 600, marginRight: '4px', userSelect: 'none' }}>
+            Path:
+          </span>
           <input 
             type="text" 
-            placeholder="Port"
-            disabled={!activeTab.usePort}
-            value={activeTab.port} 
-            onChange={(e) => updateActiveTab({ port: e.target.value })} 
-            style={{
-              width: '54px',
-              padding: '4px 2px',
-              background: 'transparent',
-              border: 'none',
-              color: activeTab.usePort ? '#f59e0b' : 'var(--text-dim)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '12px',
-              textAlign: 'center'
-            }}
-          />
-        </div>
-
-        {/* Endpoint Path (2-Way Sync with Params) */}
-        <div style={{ flex: 3, display: 'flex' }}>
-          <input 
-            type="text" 
-            placeholder="Path & Query: /v1/users?page=1"
+            placeholder="/v1/users?page=1"
             value={activeTab.apiPath} 
             onChange={(e) => updateQueryParamsFromPath(e.target.value)} 
             style={{
@@ -521,135 +834,125 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
               background: 'transparent',
               color: 'var(--text-main)',
               fontFamily: 'var(--font-mono)',
-              fontSize: '13px',
-              padding: '8px 10px'
+              fontSize: '12.5px',
+              padding: '7px 4px',
+              outline: 'none'
             }}
           />
         </div>
 
-        {/* Send Button */}
-        <button 
-          onClick={(e) => {
-            e.preventDefault();
-            handleSendRequest();
-          }} 
-          disabled={loading} 
-          style={{
-            padding: '0 22px',
-            background: loading ? '#0284c7' : 'linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)',
-            color: '#fff',
-            borderRadius: '6px',
-            fontWeight: 700,
-            fontSize: '13px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            boxShadow: '0 2px 8px rgba(14, 165, 233, 0.35)'
-          }}
-        >
-          {loading ? (
-            <span className="animate-pulse">Đang gửi...</span>
-          ) : (
-            <>
-              <span>Gửi</span>
-              <span style={{ fontSize: '11px', opacity: 0.8 }}>⚡</span>
-            </>
-          )}
-        </button>
-
-        {/* Stream SSE Toggle */}
-        <button
-          type="button"
-          onClick={() => updateActiveTab({ isStreaming: !isStreaming })}
-          title="Bật/Tắt chế độ SSE Streaming (Event-Stream / LLM Tokens)"
-          style={{
-            padding: '0 10px',
-            background: isStreaming ? 'rgba(168, 85, 247, 0.2)' : 'var(--bg-app)',
-            border: isStreaming ? '1px solid #a855f7' : '1px solid var(--border-card)',
-            color: isStreaming ? '#c084fc' : 'var(--text-muted)',
-            borderRadius: '6px',
-            fontWeight: 600,
-            fontSize: '11px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            cursor: 'pointer'
-          }}
-        >
-          <span>📡</span> Stream {isStreaming ? 'ON' : 'OFF'}
-        </button>
-
-        {/* Automation Test Button */}
-        {onOpenAutomationModal && (
+        {/* Execution Actions Group */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+          {/* Stream SSE Toggle */}
           <button
             type="button"
-            onClick={onOpenAutomationModal}
-            title="Mở Studio kiểm thử kịch bản Automation Test tự động"
+            onClick={() => updateActiveTab({ isStreaming: !isStreaming })}
+            title="Bật/Tắt chế độ SSE Streaming (Event-Stream / LLM Tokens)"
             style={{
-              padding: '0 12px',
-              background: 'rgba(56, 189, 248, 0.12)',
-              border: '1px solid rgba(56, 189, 248, 0.3)',
-              color: '#38bdf8',
+              padding: '7px 10px',
+              background: isStreaming ? 'rgba(168, 85, 247, 0.15)' : 'var(--bg-card)',
+              border: isStreaming ? '1px solid #a855f7' : '1px solid var(--border-card)',
+              color: isStreaming ? '#c084fc' : 'var(--text-muted)',
+              borderRadius: '6px',
+              fontWeight: 600,
+              fontSize: '11px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <span>📡</span>
+            <span>Stream</span>
+            <span style={{
+              fontSize: '9px',
+              padding: '1px 4px',
+              borderRadius: '4px',
+              background: isStreaming ? '#a855f7' : 'rgba(255, 255, 255, 0.08)',
+              color: isStreaming ? '#fff' : 'var(--text-dim)',
+              fontWeight: 700
+            }}>
+              {isStreaming ? 'ON' : 'OFF'}
+            </span>
+          </button>
+
+          {/* Send Button */}
+          <button 
+            onClick={(e) => {
+              e.preventDefault();
+              handleSendRequest();
+            }} 
+            disabled={loading} 
+            style={{
+              padding: '8px 22px',
+              background: loading ? '#0284c7' : 'linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)',
+              color: '#fff',
+              border: 'none',
               borderRadius: '6px',
               fontWeight: 700,
-              fontSize: '12px',
+              fontSize: '13px',
               display: 'flex',
               alignItems: 'center',
-              gap: '4px',
-              cursor: 'pointer'
+              gap: '6px',
+              boxShadow: '0 2px 10px rgba(14, 165, 233, 0.4)',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s ease'
             }}
           >
-            <span>🤖</span> Auto Test
+            {loading ? (
+              <span className="animate-pulse">Đang gửi...</span>
+            ) : (
+              <>
+                <span>Gửi</span>
+                <span style={{ fontSize: '11px', opacity: 0.9 }}>⚡</span>
+              </>
+            )}
           </button>
-        )}
+        </div>
+      </div>
 
-        {/* Mock Server Button */}
-        {onOpenMockModal && (
-          <button
-            type="button"
-            onClick={onOpenMockModal}
-            title="Mở Local Mock Server để giả lập API endpoints"
-            style={{
-              padding: '0 12px',
-              background: 'rgba(168, 85, 247, 0.12)',
-              border: '1px solid rgba(168, 85, 247, 0.3)',
-              color: '#c084fc',
-              borderRadius: '6px',
-              fontWeight: 600,
-              fontSize: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            <span>🎭</span> Mock API
-          </button>
-        )}
-
-        {/* Stress Test Button */}
-        {onOpenStressModal && (
-          <button
-            type="button"
-            onClick={onOpenStressModal}
-            title="Mở bảng đo tải hệ thống bằng Goroutines"
-            style={{
-              padding: '0 12px',
-              background: 'rgba(239, 68, 68, 0.12)',
-              border: '1px solid rgba(239, 68, 68, 0.3)',
-              color: '#f87171',
-              borderRadius: '6px',
-              fontWeight: 600,
-              fontSize: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            <span>⚡</span> Đo Tải
-          </button>
-        )}
+      {/* Resolved URL Preview Bar (Compact info & quick copy) */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '3px 8px',
+        background: 'rgba(10, 14, 23, 0.6)',
+        borderRadius: '6px',
+        fontSize: '11px',
+        fontFamily: 'var(--font-mono)',
+        color: 'var(--text-dim)',
+        border: '1px solid rgba(255, 255, 255, 0.03)',
+        marginTop: '-2px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ color: 'var(--color-primary)', fontWeight: 600, fontSize: '10px', textTransform: 'uppercase' }}>Resolved URL:</span>
+          <span style={{ color: 'var(--text-muted)' }} title={fullUrl}>{fullUrl || '(chưa có URL)'}</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard.writeText(fullUrl);
+            alert("✓ Đã sao chép URL thực thi hoàn chỉnh!");
+          }}
+          title="Sao chép toàn bộ URL hoàn chỉnh đã giải mã biến môi trường"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-dim)',
+            cursor: 'pointer',
+            fontSize: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px',
+            flexShrink: 0
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.color = 'var(--color-primary)'}
+          onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-dim)'}
+        >
+          <span>📋</span> Copy URL
+        </button>
       </div>
 
       {/* Sub-tabs bar (Params, Headers, Body, Auth, Assertions) */}

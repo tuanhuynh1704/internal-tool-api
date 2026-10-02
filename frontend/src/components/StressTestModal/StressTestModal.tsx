@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { EventsOn, EventsOff } from '../../../wailsjs/runtime/runtime';
+import useEscapeKey from '../../hooks/useEscapeKey';
 
 interface StressTestModalProps {
   isOpen: boolean;
@@ -18,6 +19,8 @@ interface TickData {
 }
 
 export default function StressTestModal({ isOpen, onClose }: StressTestModalProps) {
+  useEscapeKey(onClose, isOpen);
+
   const {
     activeTab,
     concurrency, setConcurrency,

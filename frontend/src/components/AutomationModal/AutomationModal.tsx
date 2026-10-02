@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
+import useEscapeKey from '../../hooks/useEscapeKey';
 import {
   ScenarioModel, ScenarioStepModel, AssertionRule, VariableExtraction,
   downloadExcelTemplate, parseExcelScenario, exportTestReportToExcel,
   stringifyAssertions, stringifyExtractVars
 } from '../../utils/excelScenarioHelper';
+import type { StepExecutionResult, ScenarioRunSummary } from '../../utils/scenarioRunnerEngine';
 import {
-  runScenario, StepExecutionResult, ScenarioRunSummary
-} from '../../utils/scenarioRunnerEngine';
-import {
-  GetScenariosFromDB, SaveScenarioToDB, DeleteScenarioFromDB
+  GetScenariosFromDB, SaveScenarioToDB, DeleteScenarioFromDB, RunScenario, StopScenario,
+  GetScenarioTestRuns, GetScenarioTestResults
 } from '../../../wailsjs/go/main/App';
+import { EventsOn, EventsOff } from '../../../wailsjs/runtime/runtime';
 
 interface AutomationModalProps {
   isOpen: boolean;
@@ -126,11 +127,13 @@ const DEFAULT_DEMO_SCENARIO: ScenarioModel = {
 };
 
 export default function AutomationModal({ isOpen, onClose }: AutomationModalProps) {
-  const { environments, activeEnvId } = useApp();
+  useEscapeKey(onClose, isOpen);
+
+  const { activeEnvId } = useApp();
 
   const [scenarios, setScenarios] = useState<ScenarioModel[]>([]);
   const [activeScenarioId, setActiveScenarioId] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'builder' | 'runner'>('builder');
+  const [activeTab, setActiveTab] = useState<'builder' | 'runner' | 'history'>('builder');
 
   // Step builder editing state
   const [selectedStepIndex, setSelectedStepIndex] = useState<number>(0);
@@ -145,8 +148,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
   const [inspectedStepResult, setInspectedStepResult] = useState<StepExecutionResult | null>(null);
   const [responseFormatMode, setResponseFormatMode] = useState<'pretty' | 'raw'>('pretty');
   const [copiedResponse, setCopiedResponse] = useState<boolean>(false);
+  const [savedRuns, setSavedRuns] = useState<any[]>([]);
+  const [savedResults, setSavedResults] = useState<any[]>([]);
+  const [selectedSavedRunId, setSelectedSavedRunId] = useState<string>('');
 
-  const cancelRef = useRef<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load scenarios from DB on mount
@@ -236,6 +241,21 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
 
   const currentScenario = scenarios.find(s => s.id === activeScenarioId) || scenarios[0];
   const currentStep = currentScenario?.steps?.[selectedStepIndex];
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleProgress = (event: any) => {
+      if (!currentScenario || event?.scenarioId !== currentScenario.id) return;
+      if (event.phase === 'step_start') setCurrentRunningIndex(event.current - 1);
+      if (event.phase === 'step_end' && event.stepResult) {
+        const result = event.stepResult as StepExecutionResult;
+        setStepResults(prev => [...prev, result]);
+        setInspectedStepResult(result);
+      }
+    };
+    EventsOn('automation:progress', handleProgress);
+    return () => EventsOff('automation:progress');
+  }, [isOpen, currentScenario?.id]);
 
   // Helper to update current scenario
   const updateCurrentScenario = (updater: (s: ScenarioModel) => ScenarioModel) => {
@@ -403,7 +423,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
 
   // Create New Scenario
   const handleCreateScenario = () => {
-    const newId = 'sc_' + Date.now();
+    const newId = 'sc_' + crypto.randomUUID();
     const newSc: ScenarioModel = {
       id: newId,
       name: `Kịch bản kiểm thử mới ${scenarios.length + 1}`,
@@ -413,7 +433,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
       delayMs: 200,
       steps: [
         {
-          id: 'st_' + Date.now(),
+          id: 'st_' + crypto.randomUUID(),
           stepOrder: 1,
           name: 'Bước 1: Gửi Request khởi đầu',
           method: 'GET',
@@ -461,7 +481,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
     const target = currentScenario.steps[idx];
     const cloned: ScenarioStepModel = {
       ...JSON.parse(JSON.stringify(target)),
-      id: 'st_' + Date.now(),
+      id: 'st_' + crypto.randomUUID(),
       name: `${target.name} (Copy)`
     };
     const newSteps = [...currentScenario.steps];
@@ -504,7 +524,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
   const handleAddStep = () => {
     if (!currentScenario) return;
     const newStep: ScenarioStepModel = {
-      id: 'st_' + Date.now(),
+      id: 'st_' + crypto.randomUUID(),
       stepOrder: currentScenario.steps.length + 1,
       name: `Bước ${currentScenario.steps.length + 1}: Endpoint tiếp theo`,
       method: 'GET',
@@ -530,7 +550,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
 
     try {
       const { scenarioName, steps } = await parseExcelScenario(file);
-      const newId = 'sc_' + Date.now();
+      const newId = 'sc_' + crypto.randomUUID();
       const importedScenario: ScenarioModel = {
         id: newId,
         name: scenarioName || file.name.replace(/\.[^/.]+$/, ''),
@@ -568,34 +588,15 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
     setStepResults([]);
     setRunSummary(null);
     setInspectedStepResult(null);
-    cancelRef.current = false;
-
-    // Build initial runtime context from active environment variables
-    const initialContext: Record<string, any> = {};
-    const currEnv = environments.find(e => e.id === activeEnvId);
-    if (currEnv) {
-      currEnv.variables.forEach(v => {
-        if (v.enabled && v.key.trim() !== '') {
-          initialContext[v.key.trim()] = v.value;
-        }
-      });
-    }
 
     try {
-      const { results, summary } = await runScenario(currentScenario, initialContext, {
-        onStepStart: (_, idx) => {
-          setCurrentRunningIndex(idx);
-        },
-        onStepComplete: (res, idx) => {
-          setStepResults(prev => [...prev, res]);
-          setInspectedStepResult(res);
-        },
-        shouldCancel: () => cancelRef.current
-      });
-
-      setRunSummary(summary);
-      if (results.length > 0) {
-        setInspectedStepResult(results[results.length - 1]);
+      const summary = await RunScenario(currentScenario.id, activeEnvId || '');
+      const backendResults = summary.stepResults as unknown as StepExecutionResult[];
+      const backendSummary = summary as unknown as ScenarioRunSummary;
+      setStepResults(backendResults);
+      setRunSummary(backendSummary);
+      if (backendResults.length > 0) {
+        setInspectedStepResult(backendResults[backendResults.length - 1]);
       }
     } catch (err: any) {
       console.error('Run scenario error:', err);
@@ -606,7 +607,23 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
   };
 
   const handleCancelRun = () => {
-    cancelRef.current = true;
+    if (currentScenario) StopScenario(currentScenario.id);
+  };
+
+  const loadSavedRuns = async () => {
+    if (!currentScenario) return;
+    try {
+      const runs = await GetScenarioTestRuns(currentScenario.id);
+      setSavedRuns(runs || []);
+      const runId = selectedSavedRunId && runs.some(r => r.id === selectedSavedRunId) ? selectedSavedRunId : runs[0]?.id;
+      setSelectedSavedRunId(runId || '');
+      setSavedResults(runId ? await GetScenarioTestResults(runId) : []);
+    } catch (error) { console.error('Load automation history failed:', error); }
+  };
+
+  const selectSavedRun = async (runId: string) => {
+    setSelectedSavedRunId(runId);
+    try { setSavedResults(await GetScenarioTestResults(runId)); } catch (error) { console.error('Load saved automation results failed:', error); }
   };
 
   if (!isOpen) return null;
@@ -884,6 +901,12 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
             }}
           >
             🛠️ Dựng Kịch Bản (Scenario Builder)
+          </button>
+          <button
+            onClick={() => { setActiveTab('history'); loadSavedRuns(); }}
+            style={{ padding: '10px 18px', fontSize: '13px', fontWeight: 700, background: 'transparent', color: activeTab === 'history' ? '#38bdf8' : '#94a3b8', borderBottom: activeTab === 'history' ? '2px solid #38bdf8' : '2px solid transparent', cursor: 'pointer' }}
+          >
+            🗂️ Lịch Sử ({savedRuns.length})
           </button>
           <button
             onClick={() => setActiveTab('runner')}
@@ -1677,7 +1700,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                             <option value="neq">Khác (!=)</option>
                             <option value="contains">Chứa (contains)</option>
                             <option value="gt">Lớn hơn (&gt;)</option>
+                            <option value="gte">Lớn hơn hoặc bằng (≥)</option>
                             <option value="lt">Nhỏ hơn (&lt;)</option>
+                            <option value="lte">Nhỏ hơn hoặc bằng (≤)</option>
+                            <option value="regex">Khớp biểu thức chính quy</option>
                             <option value="exists">Tồn tại (exists)</option>
                             <option value="not_exists">Không tồn tại</option>
                           </select>
@@ -2192,6 +2218,26 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'history' && currentScenario && (
+          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '280px 1fr', gap: '12px', overflow: 'hidden', padding: '16px' }}>
+            <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <button onClick={loadSavedRuns} style={{ padding: '7px 10px', background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '6px', cursor: 'pointer' }}>↻ Làm mới</button>
+              {savedRuns.map(run => <button key={run.id} onClick={() => selectSavedRun(run.id)} style={{ textAlign: 'left', padding: '10px', borderRadius: '6px', cursor: 'pointer', border: selectedSavedRunId === run.id ? '1px solid #38bdf8' : '1px solid #1e293b', background: '#0f172a', color: '#e2e8f0' }}>
+                <strong>{run.status}</strong><br /><small>{run.startedAt} · {run.duration}ms</small>
+              </button>)}
+              {savedRuns.length === 0 && <span style={{ color: '#64748b', fontSize: '12px' }}>Chưa có lần chạy đã lưu.</span>}
+            </div>
+            <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {savedResults.map(result => <div key={result.id} style={{ padding: '12px', borderRadius: '6px', border: result.status === 'PASSED' ? '1px solid rgba(16,185,129,.35)' : '1px solid rgba(239,68,68,.35)', background: '#0f172a' }}>
+                <strong style={{ color: result.status === 'PASSED' ? '#34d399' : '#f87171' }}>{result.status} · #{result.stepOrder} · {result.method} {result.httpStatus}</strong>
+                <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#94a3b8', marginTop: '5px' }}>{result.url} · {result.duration}ms</div>
+                {result.error && <pre style={{ whiteSpace: 'pre-wrap', color: '#fca5a5', fontSize: '11px' }}>{result.error}</pre>}
+              </div>)}
+              {selectedSavedRunId && savedResults.length === 0 && <span style={{ color: '#64748b', fontSize: '12px' }}>Lần chạy này không có bước đã thực thi.</span>}
             </div>
           </div>
         )}

@@ -90,12 +90,16 @@ export function GetMockServerStatus() {
   return window['go']['main']['App']['GetMockServerStatus']();
 }
 
-export function GetScenariosFromDB() {
-  return window['go']['main']['App']['GetScenariosFromDB']();
+export function GetScenarioTestResults(arg1) {
+  return window['go']['main']['App']['GetScenarioTestResults'](arg1);
 }
 
-export function GetScreenshotBase64(arg1) {
-  return window['go']['main']['App']['GetScreenshotBase64'](arg1);
+export function GetScenarioTestRuns(arg1) {
+  return window['go']['main']['App']['GetScenarioTestRuns'](arg1);
+}
+
+export function GetScenariosFromDB() {
+  return window['go']['main']['App']['GetScenariosFromDB']();
 }
 
 export function GetUIScenario(arg1) {
@@ -104,6 +108,10 @@ export function GetUIScenario(arg1) {
 
 export function GetUIScenarios() {
   return window['go']['main']['App']['GetUIScenarios']();
+}
+
+export function GetUIScreenshot(arg1, arg2) {
+  return window['go']['main']['App']['GetUIScreenshot'](arg1, arg2);
 }
 
 export function GetUITestResults(arg1) {
@@ -118,12 +126,20 @@ export function GetUpdateStatus() {
   return window['go']['main']['App']['GetUpdateStatus']();
 }
 
-export function InstallPlaywrightBrowsers() {
-  return window['go']['main']['App']['InstallPlaywrightBrowsers']();
+export function ImportPostmanCollection(arg1) {
+  return window['go']['main']['App']['ImportPostmanCollection'](arg1);
 }
 
-export function RunUIScenario(arg1, arg2, arg3) {
-  return window['go']['main']['App']['RunUIScenario'](arg1, arg2, arg3);
+export function InstallPlaywrightBrowsers(arg1) {
+  return window['go']['main']['App']['InstallPlaywrightBrowsers'](arg1);
+}
+
+export function RunScenario(arg1, arg2) {
+  return window['go']['main']['App']['RunScenario'](arg1, arg2);
+}
+
+export function RunUIScenario(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['RunUIScenario'](arg1, arg2, arg3, arg4);
 }
 
 export function SaveAllEnvironmentsToDB(arg1) {
@@ -152,6 +168,10 @@ export function StartMockServer(arg1, arg2) {
 
 export function StopMockServer() {
   return window['go']['main']['App']['StopMockServer']();
+}
+
+export function StopScenario(arg1) {
+  return window['go']['main']['App']['StopScenario'](arg1);
 }
 
 export function StopUIScenario(arg1) {

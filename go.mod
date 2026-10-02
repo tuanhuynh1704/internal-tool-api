@@ -3,6 +3,7 @@ module internal-api-client
 go 1.25.0
 
 require (
+	github.com/playwright-community/playwright-go v0.5001.0
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/sys v0.44.0
 	modernc.org/sqlite v1.53.0
@@ -31,7 +32,6 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/playwright-community/playwright-go v0.5001.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/samber/lo v1.49.1 // indirect

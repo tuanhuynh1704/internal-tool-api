@@ -1,0 +1,23 @@
+name: Verify
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.25.x' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: Enforce Go coverage baseline
+        run: |
+          go test -coverprofile=coverage.out ./...
+          COVERAGE=$(go tool cover -func coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')
+          echo "Go coverage: ${COVERAGE}%"
+          awk -v coverage="$COVERAGE" 'BEGIN { exit !(coverage >= 10) }'
+      - run: npm ci --prefix frontend
+      - run: npm test --prefix frontend
+      - run: npx --prefix frontend tsc --noEmit -p frontend/tsconfig.json
+      - run: npm run build --prefix frontend

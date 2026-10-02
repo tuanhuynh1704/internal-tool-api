@@ -43,4 +43,7 @@ func TestCheckMatch(t *testing.T) {
 	if !checkMatch("Hello world", "world", "ends_with") {
 		t.Errorf("checkMatch ends_with failed")
 	}
+	if !checkMatch("release-2026.10", `^release-\d{4}\.\d+$`, "regex") {
+		t.Errorf("checkMatch regex failed")
+	}
 }

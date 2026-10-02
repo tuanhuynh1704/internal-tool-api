@@ -22,6 +22,7 @@ type Runner struct {
 
 	activeMu sync.Mutex
 	cancels  map[string]context.CancelFunc
+	closers  map[string]func()
 }
 
 // NewRunner creates a new Runner instance
@@ -36,6 +37,7 @@ func NewRunner(engine *BrowserEngine, sm *ScreenshotManager) *Runner {
 		engine:     engine,
 		screenshot: sm,
 		cancels:    make(map[string]context.CancelFunc),
+		closers:    make(map[string]func()),
 	}
 }
 
@@ -48,6 +50,10 @@ func (r *Runner) CancelRun(scenarioID string) {
 		cancel()
 		delete(r.cancels, scenarioID)
 	}
+	if closeSession, exists := r.closers[scenarioID]; exists {
+		closeSession()
+		delete(r.closers, scenarioID)
+	}
 }
 
 // RunScenario executes all steps in a UIScenario sequentially
@@ -56,6 +62,7 @@ func (r *Runner) RunScenario(
 	scenario UIScenario,
 	envVars map[string]string,
 	headless bool,
+	ignoreHTTPSErrors bool,
 	onProgress ProgressCallback,
 ) TestRunSummary {
 	runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
@@ -99,7 +106,7 @@ func (r *Runner) RunScenario(
 	resolvedBaseURL := interpolateVariables(scenario.BaseURL, envVars)
 
 	// Launch single browser session for the entire scenario
-	browser, bCtx, page, err := r.engine.LaunchBrowserSession(scenario.Browser, headless)
+	browser, bCtx, page, err := r.engine.LaunchBrowserSession(scenario.Browser, headless, ignoreHTTPSErrors)
 	if err != nil {
 		summary.Status = RunStatusFailed
 		summary.FinishedAt = time.Now()
@@ -118,6 +125,9 @@ func (r *Runner) RunScenario(
 
 	// Ensure browser session is cleanly closed upon exit
 	defer func() {
+		r.activeMu.Lock()
+		delete(r.closers, scenario.ID)
+		r.activeMu.Unlock()
 		if page != nil {
 			_ = page.Close()
 		}
@@ -126,6 +136,36 @@ func (r *Runner) RunScenario(
 		}
 		if browser != nil {
 			_ = browser.Close()
+		}
+	}()
+	r.activeMu.Lock()
+	r.closers[scenario.ID] = func() {
+		if bCtx != nil {
+			_ = bCtx.Close()
+		}
+	}
+	r.activeMu.Unlock()
+
+	var consoleMu sync.Mutex
+	consoleLogs := make([]string, 0, 20)
+	bCtx.OnConsole(func(message playwright.ConsoleMessage) {
+		consoleMu.Lock()
+		defer consoleMu.Unlock()
+		if len(consoleLogs) < 50 {
+			consoleLogs = append(consoleLogs, fmt.Sprintf("[%s] %s", message.Type(), message.Text()))
+		}
+	})
+	tracePath := r.screenshot.GenerateTracePath(scenario.ID, runID)
+	traceStarted := bCtx.Tracing().Start(playwright.TracingStartOptions{
+		Screenshots: playwright.Bool(true),
+		Snapshots:   playwright.Bool(true),
+		Sources:     playwright.Bool(true),
+		Title:       playwright.String(scenario.Name),
+	}) == nil
+	traceSaved := false
+	defer func() {
+		if traceStarted && !traceSaved {
+			_ = bCtx.Tracing().Stop()
 		}
 	}()
 
@@ -213,12 +253,20 @@ func (r *Runner) RunScenario(
 			})
 			if scErr == nil {
 				stepRes.ScreenshotPath = screenshotPath
-				if b64, err := r.screenshot.ReadScreenshotAsBase64(screenshotPath); err == nil {
-					stepRes.ScreenshotB64 = b64
-				}
 			} else {
 				log.Printf("[ui-runner] Failed to capture failure screenshot: %v", scErr)
 			}
+			if traceStarted && !traceSaved {
+				if err := bCtx.Tracing().Stop(tracePath); err == nil {
+					traceSaved = true
+					stepRes.Details = strings.TrimSpace(stepRes.Details + "\nTrace artifact: " + tracePath)
+				}
+			}
+			consoleMu.Lock()
+			if len(consoleLogs) > 0 {
+				stepRes.Details = strings.TrimSpace(stepRes.Details + "\nBrowser console:\n" + strings.Join(consoleLogs, "\n"))
+			}
+			consoleMu.Unlock()
 		} else {
 			stepRes.Status = StatusPassed
 			summary.PassedSteps++

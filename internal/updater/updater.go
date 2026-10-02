@@ -17,7 +17,8 @@ const (
 
 	// downloadTimeout is the HTTP timeout for downloading the binary.
 	// Set to 0 to disable timeout (handled at the streaming layer instead).
-	downloadTimeout = 0
+	downloadTimeout  = 0
+	maxManifestBytes = 1 << 20
 )
 
 // CheckForUpdate fetches manifestURL, parses the JSON, and returns an UpdateInfo
@@ -38,9 +39,12 @@ func CheckForUpdate(manifestURL, currentVersion string) (*UpdateInfo, error) {
 		return nil, fmt.Errorf("manifest server returned %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read manifest body: %w", err)
+	}
+	if len(body) > maxManifestBytes {
+		return nil, fmt.Errorf("manifest exceeds %d bytes", maxManifestBytes)
 	}
 
 	var manifest UpdateManifest

@@ -4,7 +4,7 @@ export interface AssertionRule {
   id?: string;
   type: 'status' | 'time' | 'body_json' | 'header' | 'body_text';
   target?: string;       // JSONPath e.g. "$.success" or "$.data.token" or header name
-  operator: 'eq' | 'neq' | 'contains' | 'gt' | 'lt' | 'exists' | 'not_exists';
+  operator: 'eq' | 'neq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'regex' | 'exists' | 'not_exists';
   expected: string;      // e.g. "200", "1000", "true", "admin"
   enabled?: boolean;
 }
@@ -69,9 +69,9 @@ export function parseAssertionsString(str: string): AssertionRule[] {
     }
 
     // Check response time e.g. "time < 1000" or "time <= 500" or "latency < 2000"
-    const timeMatch = part.match(/^(?:time|latency)\s*(<|<=|lt)\s*(\d+)/i);
+    const timeMatch = part.match(/^(?:time|latency)\s*(<|<=|lt|lte)\s*(\d+)/i);
     if (timeMatch) {
-      rules.push({ type: 'time', operator: 'lt', expected: timeMatch[2] });
+      rules.push({ type: 'time', operator: timeMatch[1] === '<=' || timeMatch[1].toLowerCase() === 'lte' ? 'lte' : 'lt', expected: timeMatch[2] });
       continue;
     }
 
@@ -96,8 +96,10 @@ export function parseAssertionsString(str: string): AssertionRule[] {
       let operator: AssertionRule['operator'] = 'eq';
       if (rawOp === '!=') operator = 'neq';
       else if (rawOp === 'contains') operator = 'contains';
-      else if (rawOp === '>' || rawOp === '>=') operator = 'gt';
-      else if (rawOp === '<' || rawOp === '<=') operator = 'lt';
+      else if (rawOp === '>') operator = 'gt';
+      else if (rawOp === '>=') operator = 'gte';
+      else if (rawOp === '<') operator = 'lt';
+      else if (rawOp === '<=') operator = 'lte';
       else if (rawOp === 'exists') operator = 'exists';
       else if (rawOp === 'not_exists') operator = 'not_exists';
 

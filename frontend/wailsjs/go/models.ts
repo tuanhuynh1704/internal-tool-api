@@ -233,6 +233,175 @@ export namespace main {
 	        this.os = source["os"];
 	    }
 	}
+	export class AutomationAssertion {
+	    type: string;
+	    target?: string;
+	    operator: string;
+	    expected: string;
+	    enabled?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationAssertion(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.target = source["target"];
+	        this.operator = source["operator"];
+	        this.expected = source["expected"];
+	        this.enabled = source["enabled"];
+	    }
+	}
+	export class AutomationAssertionResult {
+	    rule: AutomationAssertion;
+	    passed: boolean;
+	    message: string;
+	    actual?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationAssertionResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rule = this.convertValues(source["rule"], AutomationAssertion);
+	        this.passed = source["passed"];
+	        this.message = source["message"];
+	        this.actual = source["actual"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AutomationStepResult {
+	    stepId: string;
+	    stepName: string;
+	    stepOrder: number;
+	    method: string;
+	    url: string;
+	    status: number;
+	    statusText: string;
+	    durationMs: number;
+	    responseBody: string;
+	    responseHeaders: Record<string, string>;
+	    passed: boolean;
+	    assertionDetails: AutomationAssertionResult[];
+	    extracted: Record<string, any>;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationStepResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.stepId = source["stepId"];
+	        this.stepName = source["stepName"];
+	        this.stepOrder = source["stepOrder"];
+	        this.method = source["method"];
+	        this.url = source["url"];
+	        this.status = source["status"];
+	        this.statusText = source["statusText"];
+	        this.durationMs = source["durationMs"];
+	        this.responseBody = source["responseBody"];
+	        this.responseHeaders = source["responseHeaders"];
+	        this.passed = source["passed"];
+	        this.assertionDetails = this.convertValues(source["assertionDetails"], AutomationAssertionResult);
+	        this.extracted = source["extracted"];
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AutomationRunSummary {
+	    runId: string;
+	    scenarioId: string;
+	    scenarioName: string;
+	    status: string;
+	    totalSteps: number;
+	    passedSteps: number;
+	    failedSteps: number;
+	    skippedSteps: number;
+	    totalDurationMs: number;
+	    avgDurationMs: number;
+	    successRate: number;
+	    passed: boolean;
+	    runtimeContext: Record<string, any>;
+	    stepResults: AutomationStepResult[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRunSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.scenarioId = source["scenarioId"];
+	        this.scenarioName = source["scenarioName"];
+	        this.status = source["status"];
+	        this.totalSteps = source["totalSteps"];
+	        this.passedSteps = source["passedSteps"];
+	        this.failedSteps = source["failedSteps"];
+	        this.skippedSteps = source["skippedSteps"];
+	        this.totalDurationMs = source["totalDurationMs"];
+	        this.avgDurationMs = source["avgDurationMs"];
+	        this.successRate = source["successRate"];
+	        this.passed = source["passed"];
+	        this.runtimeContext = source["runtimeContext"];
+	        this.stepResults = this.convertValues(source["stepResults"], AutomationStepResult);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class DBEnvVariable {
 	    id: string;
 	    key: string;
@@ -442,6 +611,66 @@ export namespace main {
 		}
 	}
 	
+	export class DBScenarioTestResult {
+	    id: string;
+	    runId: string;
+	    stepId: string;
+	    stepOrder: number;
+	    status: string;
+	    duration: number;
+	    method: string;
+	    url: string;
+	    httpStatus: number;
+	    responseBody: string;
+	    responseHeaders: string;
+	    assertionDetails: string;
+	    extractedVars: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DBScenarioTestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.runId = source["runId"];
+	        this.stepId = source["stepId"];
+	        this.stepOrder = source["stepOrder"];
+	        this.status = source["status"];
+	        this.duration = source["duration"];
+	        this.method = source["method"];
+	        this.url = source["url"];
+	        this.httpStatus = source["httpStatus"];
+	        this.responseBody = source["responseBody"];
+	        this.responseHeaders = source["responseHeaders"];
+	        this.assertionDetails = source["assertionDetails"];
+	        this.extractedVars = source["extractedVars"];
+	        this.error = source["error"];
+	    }
+	}
+	export class DBScenarioTestRun {
+	    id: string;
+	    scenarioId: string;
+	    status: string;
+	    startedAt: string;
+	    finishedAt: string;
+	    duration: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DBScenarioTestRun(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.scenarioId = source["scenarioId"];
+	        this.status = source["status"];
+	        this.startedAt = source["startedAt"];
+	        this.finishedAt = source["finishedAt"];
+	        this.duration = source["duration"];
+	    }
+	}
 	export class DBUIStep {
 	    id: string;
 	    scenarioId: string;
@@ -521,10 +750,12 @@ export namespace main {
 	    id: string;
 	    runId: string;
 	    stepId: string;
+	    stepOrder: number;
 	    status: string;
 	    error: string;
 	    duration: number;
 	    screenshotPath: string;
+	    details: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new DBUITestResult(source);
@@ -535,10 +766,12 @@ export namespace main {
 	        this.id = source["id"];
 	        this.runId = source["runId"];
 	        this.stepId = source["stepId"];
+	        this.stepOrder = source["stepOrder"];
 	        this.status = source["status"];
 	        this.error = source["error"];
 	        this.duration = source["duration"];
 	        this.screenshotPath = source["screenshotPath"];
+	        this.details = source["details"];
 	    }
 	}
 	export class DBUITestRun {
@@ -561,6 +794,24 @@ export namespace main {
 	        this.startedAt = source["startedAt"];
 	        this.finishedAt = source["finishedAt"];
 	        this.duration = source["duration"];
+	    }
+	}
+	export class PostmanImportResult {
+	    projectId: string;
+	    projectName: string;
+	    importedFolders: number;
+	    importedRequests: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PostmanImportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.projectId = source["projectId"];
+	        this.projectName = source["projectName"];
+	        this.importedFolders = source["importedFolders"];
+	        this.importedRequests = source["importedRequests"];
 	    }
 	}
 	export class ProjectDataPayload {

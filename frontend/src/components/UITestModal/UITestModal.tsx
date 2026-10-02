@@ -9,7 +9,7 @@ import {
   StopUIScenario,
   GetUITestRuns,
   GetUITestResults,
-  GetScreenshotBase64,
+  GetUIScreenshot,
   InstallPlaywrightBrowsers
 } from '../../../wailsjs/go/main/App';
 import { EventsOn, EventsOff } from '../../../wailsjs/runtime/runtime';
@@ -17,6 +17,7 @@ import UIStepBuilder from './UIStepBuilder';
 import UIStepList from './UIStepList';
 import UIRunnerPanel from './UIRunnerPanel';
 import UIScreenshotModal from './UIScreenshotModal';
+import useEscapeKey from '../../hooks/useEscapeKey';
 
 interface UITestModalProps {
   isOpen: boolean;
@@ -95,6 +96,8 @@ const DEFAULT_DEMO_UI_SCENARIO: main.DBUIScenario = new main.DBUIScenario({
 });
 
 export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
+  useEscapeKey(onClose, isOpen);
+
   const { environments, activeEnvId } = useApp();
 
   // Scenarios State
@@ -116,6 +119,7 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
   const [runSummary, setRunSummary] = useState<ui.TestRunSummary | null>(null);
   const [selectedEnvId, setSelectedEnvId] = useState<string>(activeEnvId || '');
   const [headless, setHeadless] = useState<boolean>(false);
+  const [ignoreHTTPSErrors, setIgnoreHTTPSErrors] = useState<boolean>(false);
 
   // History State
   const [testRuns, setTestRuns] = useState<main.DBUITestRun[]>([]);
@@ -383,7 +387,7 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
     setRunSummary(null);
 
     try {
-      const summary = await RunUIScenario(activeScenario.id, selectedEnvId, headless);
+      const summary = await RunUIScenario(activeScenario.id, selectedEnvId, headless, ignoreHTTPSErrors);
       setRunSummary(summary);
       setStepResults(summary.stepResults || []);
     } catch (err: any) {
@@ -396,7 +400,6 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
   const handleStopTest = () => {
     if (!activeScenario) return;
     StopUIScenario(activeScenario.id);
-    setIsRunning(false);
   };
 
   // ─── History Handlers ───────────────────────────────────────────────────────
@@ -431,18 +434,14 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
 
   // ─── Screenshot Zoom Handler ────────────────────────────────────────────────
 
-  const handleOpenScreenshot = async (imgSource: string, stepName: string, error: string) => {
-    if (imgSource.startsWith('data:image')) {
-      setScreenshotData({ url: imgSource, stepName, error });
+  const handleOpenScreenshot = async (runId: string, resultId: string, stepName: string, error: string) => {
+    if (!runId || !resultId) return;
+    try {
+      const b64 = await GetUIScreenshot(runId, resultId);
+      setScreenshotData({ url: b64, stepName, error });
       setScreenshotModalOpen(true);
-    } else {
-      try {
-        const b64 = await GetScreenshotBase64(imgSource);
-        setScreenshotData({ url: b64, stepName, error });
-        setScreenshotModalOpen(true);
-      } catch (err) {
-        alert(`Could not load screenshot: ${err}`);
-      }
+    } catch (err) {
+      alert(`Could not load screenshot: ${err}`);
     }
   };
 
@@ -451,8 +450,9 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
   const handleInstallBrowsers = async () => {
     setInstallingBrowsers(true);
     try {
-      await InstallPlaywrightBrowsers();
-      alert('✓ Playwright Chromium browser installed successfully!');
+      const browser = activeScenario?.browser || 'chromium';
+      await InstallPlaywrightBrowsers(browser);
+      alert(`✓ Playwright ${browser} browser installed successfully!`);
     } catch (err: any) {
       alert(`Installation error: ${err?.message || err}`);
     } finally {
@@ -819,6 +819,14 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                     />
                     <span>Headless</span>
                   </label>
+                  <label title="Only enable for a trusted development environment with a self-signed certificate" style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: '#fbbf24', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={ignoreHTTPSErrors}
+                      onChange={(e) => setIgnoreHTTPSErrors(e.target.checked)}
+                    />
+                    <span>Allow invalid TLS</span>
+                  </label>
 
                   {/* View Tabs */}
                   <div style={{ display: 'flex', background: '#0a0e17', borderRadius: '6px', padding: '2px', border: '1px solid #1e293b' }}>
@@ -1075,9 +1083,14 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                                 {hr.error}
                               </pre>
                             )}
+                            {hr.details && (
+                              <pre style={{ margin: 0, fontSize: '10.5px', color: '#94a3b8', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap' }}>
+                                {hr.details}
+                              </pre>
+                            )}
                             {hr.screenshotPath && (
                               <button
-                                onClick={() => handleOpenScreenshot(hr.screenshotPath, `Step ${idx + 1}`, hr.error)}
+                                onClick={() => handleOpenScreenshot(hr.runId, hr.id, `Step ${hr.stepOrder || idx + 1}`, hr.error)}
                                 style={{
                                   alignSelf: 'flex-start',
                                   background: '#ef4444',

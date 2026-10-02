@@ -158,8 +158,14 @@ export function evaluateAssertion(
         passed = actualStr.toLowerCase().includes(expectedRaw.toLowerCase());
       } else if (rule.operator === 'gt') {
         passed = Number(actualVal) > Number(expectedRaw);
+      } else if (rule.operator === 'gte') {
+        passed = Number(actualVal) >= Number(expectedRaw);
       } else if (rule.operator === 'lt') {
         passed = Number(actualVal) < Number(expectedRaw);
+      } else if (rule.operator === 'lte') {
+        passed = Number(actualVal) <= Number(expectedRaw);
+      } else if (rule.operator === 'regex') {
+        try { passed = new RegExp(expectedRaw).test(actualStr); } catch { passed = false; }
       } else if (rule.operator === 'exists') {
         passed = actualVal !== undefined && actualVal !== null;
       } else if (rule.operator === 'not_exists') {
@@ -176,11 +182,24 @@ export function evaluateAssertion(
       };
     }
 
+    case 'body_text': {
+      const actual = response.body || '';
+      let passed = false;
+      if (rule.operator === 'eq') passed = actual === expectedRaw;
+      else if (rule.operator === 'neq') passed = actual !== expectedRaw;
+      else if (rule.operator === 'contains') passed = actual.includes(expectedRaw);
+      else if (rule.operator === 'exists') passed = actual.length > 0;
+      else if (rule.operator === 'not_exists') passed = actual.length === 0;
+      return { rule, passed, actual, message: passed
+        ? `Body text thỏa mãn ${rule.operator}`
+        : `Body text không thỏa mãn ${rule.operator} "${expectedRaw}"` };
+    }
+
     default:
       return {
         rule,
-        passed: true,
-        message: 'Unknown assertion rule passed'
+        passed: false,
+        message: `Unsupported assertion rule: ${rule.type}`
       };
   }
 }
@@ -329,6 +348,26 @@ export async function runScenario(
     }
     targetUrl = resolveTemplateVariables(targetUrl, context);
 
+    // Keep the legacy frontend runner behaviour aligned with the backend
+    // runner: enabled query parameters are resolved and URL-encoded.
+    try {
+      const params = JSON.parse(step.paramsJson || '[]');
+      if (Array.isArray(params) && params.length > 0) {
+        const url = new URL(targetUrl);
+        params.forEach((param: any) => {
+          if (param?.enabled !== false && String(param?.key || '').trim()) {
+            url.searchParams.append(
+              resolveTemplateVariables(String(param.key).trim(), context),
+              resolveTemplateVariables(String(param.value ?? ''), context)
+            );
+          }
+        });
+        targetUrl = url.toString();
+      }
+    } catch {
+      // The backend is authoritative; retain the original URL for legacy callers.
+    }
+
     // Build Headers using flexible parser
     const headersMap = parseHeadersToMap(step.headersJson || '[]', context);
 
@@ -377,6 +416,7 @@ export async function runScenario(
       let stepPassed = true;
 
       for (const rule of step.assertions || []) {
+        if (rule.enabled === false) continue;
         const evalRes = evaluateAssertion(rule, response, parsedJson, context);
         assertionDetails.push(evalRes);
         if (!evalRes.passed) {

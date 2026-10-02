@@ -1,4 +1,5 @@
 import React from 'react';
+import useEscapeKey from '../../hooks/useEscapeKey';
 
 interface UIScreenshotModalProps {
   isOpen: boolean;
@@ -15,7 +16,10 @@ export default function UIScreenshotModal({
   stepName,
   error
 }: UIScreenshotModalProps) {
+  useEscapeKey(onClose, isOpen && Boolean(imageUrl));
+
   if (!isOpen || !imageUrl) return null;
+
 
   return (
     <div

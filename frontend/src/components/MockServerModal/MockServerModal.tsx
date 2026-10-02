@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import useEscapeKey from '../../hooks/useEscapeKey';
 import { 
   StartMockServer, 
   StopMockServer, 
@@ -15,6 +16,8 @@ interface MockServerModalProps {
 }
 
 export default function MockServerModal({ isOpen, onClose, onOpenInNewTab }: MockServerModalProps) {
+  useEscapeKey(onClose, isOpen);
+
   const [port, setPort] = useState<number>(9090);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [serverUrl, setServerUrl] = useState<string>('');

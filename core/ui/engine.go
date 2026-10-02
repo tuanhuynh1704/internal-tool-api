@@ -20,7 +20,7 @@ func NewBrowserEngine() *BrowserEngine {
 }
 
 // EnsurePlaywright initializes the Playwright driver if not already running
-func (be *BrowserEngine) EnsurePlaywright() (*playwright.Playwright, error) {
+func (be *BrowserEngine) EnsurePlaywright(browser BrowserType) (*playwright.Playwright, error) {
 	be.mu.Lock()
 	defer be.mu.Unlock()
 
@@ -33,7 +33,7 @@ func (be *BrowserEngine) EnsurePlaywright() (*playwright.Playwright, error) {
 		// Attempt automatic driver installation
 		log.Printf("[ui-engine] Playwright driver run failed, trying install: %v", err)
 		installErr := playwright.Install(&playwright.RunOptions{
-			Browsers: []string{"chromium"},
+			Browsers: []string{string(normalizeBrowser(browser))},
 		})
 		if installErr != nil {
 			return nil, fmt.Errorf("failed to install playwright browsers: %w (original error: %v)", installErr, err)
@@ -49,16 +49,26 @@ func (be *BrowserEngine) EnsurePlaywright() (*playwright.Playwright, error) {
 	return be.pw, nil
 }
 
-// InstallBrowsers explicitly runs playwright.Install for chromium
-func (be *BrowserEngine) InstallBrowsers() error {
+// InstallBrowsers explicitly installs the browser selected by the scenario.
+func (be *BrowserEngine) InstallBrowsers(browser BrowserType) error {
 	return playwright.Install(&playwright.RunOptions{
-		Browsers: []string{"chromium"},
+		Browsers: []string{string(normalizeBrowser(browser))},
 	})
 }
 
+func normalizeBrowser(browser BrowserType) BrowserType {
+	switch browser {
+	case BrowserFirefox, BrowserWebKit, BrowserChromium:
+		return browser
+	default:
+		return BrowserChromium
+	}
+}
+
 // LaunchBrowserSession launches a single browser, browser context, and page for a test run
-func (be *BrowserEngine) LaunchBrowserSession(bType BrowserType, headless bool) (playwright.Browser, playwright.BrowserContext, playwright.Page, error) {
-	pw, err := be.EnsurePlaywright()
+func (be *BrowserEngine) LaunchBrowserSession(bType BrowserType, headless bool, ignoreHTTPSErrors bool) (playwright.Browser, playwright.BrowserContext, playwright.Page, error) {
+	bType = normalizeBrowser(bType)
+	pw, err := be.EnsurePlaywright(bType)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -90,7 +100,7 @@ func (be *BrowserEngine) LaunchBrowserSession(bType BrowserType, headless bool) 
 			Width:  1280,
 			Height: 800,
 		},
-		IgnoreHttpsErrors: playwright.Bool(true),
+		IgnoreHttpsErrors: playwright.Bool(ignoreHTTPSErrors),
 	})
 	if err != nil {
 		_ = browser.Close()

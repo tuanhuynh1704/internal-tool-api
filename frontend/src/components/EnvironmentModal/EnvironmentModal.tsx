@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp, Environment, EnvVariable } from '../../context/AppContext';
+import useEscapeKey from '../../hooks/useEscapeKey';
 
 interface EnvironmentModalProps {
   isOpen: boolean;
@@ -11,6 +12,10 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
   const [selectedEnvId, setSelectedEnvId] = useState<string>(activeEnvId === 'none' ? (environments[0]?.id || '') : activeEnvId);
   const [newEnvName, setNewEnvName] = useState('');
   const [isAddingEnv, setIsAddingEnv] = useState(false);
+
+  // Close modal or cancel adding environment on Escape
+  useEscapeKey(onClose, isOpen && !isAddingEnv);
+  useEscapeKey(() => setIsAddingEnv(false), isOpen && isAddingEnv);
 
   if (!isOpen) return null;
 
@@ -205,7 +210,10 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
                   autoFocus
                   onKeyDown={e => {
                     if (e.key === 'Enter') handleAddEnv();
-                    if (e.key === 'Escape') setIsAddingEnv(false);
+                    if (e.key === 'Escape') {
+                      e.stopPropagation();
+                      setIsAddingEnv(false);
+                    }
                   }}
                   style={{ fontSize: '12px', padding: '4px 8px' }}
                 />

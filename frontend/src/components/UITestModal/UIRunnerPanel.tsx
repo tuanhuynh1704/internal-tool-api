@@ -7,7 +7,7 @@ interface UIRunnerPanelProps {
   totalSteps: number;
   stepResults: ui.StepExecutionResult[];
   summary: ui.TestRunSummary | null;
-  onViewScreenshot: (imageUrl: string, stepName: string, error: string) => void;
+  onViewScreenshot: (runId: string, resultId: string, stepName: string, error: string) => void;
 }
 
 export default function UIRunnerPanel({
@@ -200,7 +200,7 @@ export default function UIRunnerPanel({
                     {(res.screenshotB64 || res.screenshotPath) && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
                         <button
-                          onClick={() => onViewScreenshot(res.screenshotB64 || res.screenshotPath || '', res.stepName || '', res.error || '')}
+                          onClick={() => onViewScreenshot(summary?.runId || '', `res_${summary?.runId || ''}_${idx + 1}`, res.stepName || '', res.error || '')}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
