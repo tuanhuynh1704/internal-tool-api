@@ -1,1 +1,0 @@
-# keep frontend/dist directory tracked in git so go:embed pattern succeeds on clean clone

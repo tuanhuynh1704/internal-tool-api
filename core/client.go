@@ -157,6 +157,7 @@ func (e *HttpClientEngine) execute(ctx context.Context, payload RequestPayload) 
 	}
 
 	// Trace Network Timings
+	var traceMu sync.Mutex
 	var dnsStart, dnsDone time.Time
 	var connStart, connDone time.Time
 	var tlsStart, tlsDone time.Time
@@ -164,25 +165,49 @@ func (e *HttpClientEngine) execute(ctx context.Context, payload RequestPayload) 
 
 	trace := &httptrace.ClientTrace{
 		DNSStart: func(info httptrace.DNSStartInfo) {
-			dnsStart = time.Now()
+			traceMu.Lock()
+			if dnsStart.IsZero() {
+				dnsStart = time.Now()
+			}
+			traceMu.Unlock()
 		},
 		DNSDone: func(info httptrace.DNSDoneInfo) {
+			traceMu.Lock()
 			dnsDone = time.Now()
+			traceMu.Unlock()
 		},
 		ConnectStart: func(network, addr string) {
-			connStart = time.Now()
+			traceMu.Lock()
+			if connStart.IsZero() {
+				connStart = time.Now()
+			}
+			traceMu.Unlock()
 		},
 		ConnectDone: func(network, addr string, err error) {
-			connDone = time.Now()
+			traceMu.Lock()
+			if err == nil || connDone.IsZero() {
+				connDone = time.Now()
+			}
+			traceMu.Unlock()
 		},
 		TLSHandshakeStart: func() {
-			tlsStart = time.Now()
+			traceMu.Lock()
+			if tlsStart.IsZero() {
+				tlsStart = time.Now()
+			}
+			traceMu.Unlock()
 		},
 		TLSHandshakeDone: func(state tls.ConnectionState, err error) {
+			traceMu.Lock()
 			tlsDone = time.Now()
+			traceMu.Unlock()
 		},
 		GotFirstResponseByte: func() {
-			gotFirstByte = time.Now()
+			traceMu.Lock()
+			if gotFirstByte.IsZero() {
+				gotFirstByte = time.Now()
+			}
+			traceMu.Unlock()
 		},
 	}
 
@@ -204,6 +229,7 @@ func (e *HttpClientEngine) execute(ctx context.Context, payload RequestPayload) 
 
 	// Calculate granular timings
 	var dnsTime, tcpTime, tlsTime, ttfbTime, downloadTime int64
+	traceMu.Lock()
 	if !dnsStart.IsZero() && !dnsDone.IsZero() {
 		dnsTime = dnsDone.Sub(dnsStart).Milliseconds()
 	}
@@ -218,6 +244,7 @@ func (e *HttpClientEngine) execute(ctx context.Context, payload RequestPayload) 
 	} else {
 		ttfbTime = totalDuration
 	}
+	traceMu.Unlock()
 	downloadTime = time.Since(bodyReadStart).Milliseconds()
 
 	for k, v := range resp.Header {
