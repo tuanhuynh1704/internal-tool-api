@@ -9,9 +9,10 @@ interface SidebarProps {
   onOpenEnvModal?: () => void;
   onOpenAutomationModal?: () => void;
   onOpenUITestModal?: () => void;
+  onOpenUserGuide?: () => void;
 }
 
-export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenUITestModal }: SidebarProps) {
+export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenUITestModal, onOpenUserGuide }: SidebarProps) {
   const {
     projects, folders, dbRequests,
     createProject, renameProject, deleteProject,
@@ -27,7 +28,7 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
 
   const [isCreatingProj, setIsCreatingProj] = useState(false);
   const [newProjName, setNewProjName] = useState('');
-  
+
   const [editingId, setEditingId] = useState<string>('');
   const [editingName, setEditingName] = useState<string>('');
 
@@ -45,7 +46,7 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
       if (info && info.version) {
         setAppInfo({ name: info.name || 'API Tester', version: info.version });
       }
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   const currentProject = projects.find(p => p.id === activeProjId) || projects[0];
@@ -185,8 +186,8 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
   const filteredRequests = useMemo(() => {
     if (!searchTerm.trim() || !currentProject) return null;
     const term = searchTerm.toLowerCase();
-    return dbRequests.filter(r => 
-      r.projectId === currentProject.id && 
+    return dbRequests.filter(r =>
+      r.projectId === currentProject.id &&
       (r.name.toLowerCase().includes(term) || (r.apiPath && r.apiPath.toLowerCase().includes(term)) || r.method.toLowerCase().includes(term))
     );
   }, [searchTerm, currentProject, dbRequests]);
@@ -232,7 +233,7 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
                     {isCollapsed ? '▶' : '▼'}
                   </span>
                   <span style={{ fontSize: '14px', color: '#f59e0b' }}>📁</span>
-                  
+
                   {isEditing ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1 }} onClick={e => e.stopPropagation()}>
                       <input
@@ -312,37 +313,56 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
               {/* Nested Create Form */}
               {isCreatingHere && (
                 <div style={{
+                  marginTop: '6px',
+                  marginBottom: '6px',
                   marginLeft: `${(level + 1) * 14 + 10}px`,
                   marginRight: '8px',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '6px',
-                  margin: '6px 4px',
+                  gap: '8px',
                   background: '#151e2e',
-                  padding: '8px',
+                  padding: '8px 10px',
                   borderRadius: '6px',
-                  border: '1px solid var(--border-card)'
+                  border: '1px solid var(--border-card)',
+                  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.3)',
+                  boxSizing: 'border-box'
                 }}>
-                  <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
-                    Tạo {createType === 'folder' ? 'thư mục con' : 'Request mới'}:
+                  <div style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <span style={{ color: createType === 'folder' ? '#f59e0b' : 'var(--color-primary)' }}>
+                      {createType === 'folder' ? '📁' : '⚡'}
+                    </span>
+                    <span>Tạo {createType === 'folder' ? 'thư mục con' : 'Request mới'}:</span>
                   </div>
-                  <div style={{ display: 'flex', gap: '4px' }}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
                     {createType === 'request' && (
                       <select
                         value={createMethod}
                         onChange={e => setCreateMethod(e.target.value)}
-                        style={{ padding: '2px 4px', fontSize: '11px', fontWeight: 700, background: '#0a0e17', color: '#f8fafc', border: '1px solid #334155' }}
+                        style={{
+                          flexShrink: 0,
+                          height: '28px',
+                          padding: '0 6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          background: '#0a0e17',
+                          color: getMethodBadgeStyle(createMethod).color || '#f8fafc',
+                          border: '1px solid #334155',
+                          borderRadius: '4px',
+                          outline: 'none',
+                          cursor: 'pointer',
+                          boxSizing: 'border-box'
+                        }}
                       >
-                        <option>GET</option>
-                        <option>POST</option>
-                        <option>PUT</option>
-                        <option>DELETE</option>
-                        <option>PATCH</option>
+                        <option value="GET">GET</option>
+                        <option value="POST">POST</option>
+                        <option value="PUT">PUT</option>
+                        <option value="DELETE">DELETE</option>
+                        <option value="PATCH">PATCH</option>
                       </select>
                     )}
                     <input
                       type="text"
-                      placeholder="Tên..."
+                      placeholder={createType === 'folder' ? 'Nhập tên thư mục...' : 'Nhập tên request...'}
                       value={createName}
                       onChange={e => setCreateName(e.target.value)}
                       onKeyDown={e => {
@@ -352,18 +372,59 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
                       autoFocus
                       style={{
                         flex: 1,
+                        minWidth: 0,
+                        width: '100%',
+                        height: '28px',
                         fontSize: '12px',
-                        padding: '4px 8px',
+                        padding: '0 8px',
                         background: '#0a0e17',
                         color: '#f8fafc',
                         border: '1px solid var(--border-focus)',
-                        borderRadius: '4px'
+                        borderRadius: '4px',
+                        outline: 'none',
+                        boxSizing: 'border-box'
                       }}
                     />
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
-                    <button onClick={() => setCreatingInFolderId(null)} style={{ background: 'transparent', color: '#94a3b8', fontSize: '11px', padding: '2px 6px' }}>Hủy</button>
-                    <button onClick={saveCreate} style={{ background: 'var(--color-primary)', color: '#0b0f17', fontWeight: 600, fontSize: '11px', padding: '2px 8px', borderRadius: '4px' }}>Tạo</button>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', alignItems: 'center', marginTop: '2px' }}>
+                    <button
+                      onClick={() => setCreatingInFolderId(null)}
+                      style={{
+                        height: '24px',
+                        padding: '0 10px',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        background: 'rgba(148, 163, 184, 0.1)',
+                        color: '#94a3b8',
+                        border: '1px solid rgba(148, 163, 184, 0.2)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      onClick={saveCreate}
+                      style={{
+                        height: '24px',
+                        padding: '0 12px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        background: 'var(--color-primary)',
+                        color: '#0b0f17',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      Tạo
+                    </button>
                   </div>
                 </div>
               )}
@@ -566,6 +627,38 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
               </span>
             </div>
           </div>
+
+          {onOpenUserGuide && (
+            <button
+              onClick={onOpenUserGuide}
+              title="Hướng dẫn sử dụng & Tài liệu (Docs)"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                background: 'rgba(56, 189, 248, 0.1)',
+                border: '1px solid rgba(56, 189, 248, 0.3)',
+                color: '#38bdf8',
+                fontSize: '11px',
+                fontWeight: 700,
+                padding: '3px 7px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'rgba(56, 189, 248, 0.2)';
+                e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.5)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'rgba(56, 189, 248, 0.1)';
+                e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.3)';
+              }}
+            >
+              <span>📖</span>
+              <span>Docs</span>
+            </button>
+          )}
         </div>
 
         {/* Row 2: Quick Actions (Import / Export) */}
@@ -602,9 +695,9 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
             }}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
             Import
           </button>
@@ -636,9 +729,9 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
             }}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="17 8 12 3 7 8"/>
-              <line x1="12" y1="3" x2="12" y2="15"/>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
             Export
           </button>
@@ -922,33 +1015,51 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
             <div style={{
               display: 'flex',
               flexDirection: 'column',
-              gap: '6px',
+              gap: '8px',
               margin: '8px 0',
               background: '#151e2e',
-              padding: '10px',
+              padding: '8px 10px',
               borderRadius: '6px',
-              border: '1px solid var(--border-card)'
+              border: '1px solid var(--border-card)',
+              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.3)',
+              boxSizing: 'border-box'
             }}>
-              <div style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 600 }}>
-                Tạo {createType === 'folder' ? 'thư mục mới' : 'Request mới'} tại thư mục gốc:
+              <div style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{ color: createType === 'folder' ? '#f59e0b' : 'var(--color-primary)' }}>
+                  {createType === 'folder' ? '📁' : '⚡'}
+                </span>
+                <span>Tạo {createType === 'folder' ? 'thư mục mới' : 'Request mới'} tại thư mục gốc:</span>
               </div>
-              <div style={{ display: 'flex', gap: '4px' }}>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
                 {createType === 'request' && (
                   <select
                     value={createMethod}
                     onChange={e => setCreateMethod(e.target.value)}
-                    style={{ padding: '4px', fontSize: '11px', fontWeight: 700 }}
+                    style={{
+                      flexShrink: 0,
+                      height: '28px',
+                      padding: '0 6px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      background: '#0a0e17',
+                      color: getMethodBadgeStyle(createMethod).color || '#f8fafc',
+                      border: '1px solid #334155',
+                      borderRadius: '4px',
+                      outline: 'none',
+                      cursor: 'pointer',
+                      boxSizing: 'border-box'
+                    }}
                   >
-                    <option>GET</option>
-                    <option>POST</option>
-                    <option>PUT</option>
-                    <option>DELETE</option>
-                    <option>PATCH</option>
+                    <option value="GET">GET</option>
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="DELETE">DELETE</option>
+                    <option value="PATCH">PATCH</option>
                   </select>
                 )}
                 <input
                   type="text"
-                  placeholder="Nhập tên..."
+                  placeholder={createType === 'folder' ? 'Nhập tên thư mục...' : 'Nhập tên request...'}
                   value={createName}
                   onChange={e => setCreateName(e.target.value)}
                   onKeyDown={e => {
@@ -958,18 +1069,59 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
                   autoFocus
                   style={{
                     flex: 1,
+                    minWidth: 0,
+                    width: '100%',
+                    height: '28px',
                     fontSize: '12px',
-                    padding: '4px 8px',
+                    padding: '0 8px',
                     background: '#0a0e17',
                     color: '#f8fafc',
                     border: '1px solid var(--border-focus)',
-                    borderRadius: '4px'
+                    borderRadius: '4px',
+                    outline: 'none',
+                    boxSizing: 'border-box'
                   }}
                 />
               </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
-                <button onClick={() => setCreatingInFolderId(null)} style={{ background: 'transparent', color: '#94a3b8', fontSize: '11px', padding: '2px 6px' }}>Hủy</button>
-                <button onClick={saveCreate} style={{ background: 'var(--color-primary)', color: '#0b0f17', fontWeight: 600, fontSize: '11px', padding: '4px 10px', borderRadius: '4px' }}>Tạo</button>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', alignItems: 'center', marginTop: '2px' }}>
+                <button
+                  onClick={() => setCreatingInFolderId(null)}
+                  style={{
+                    height: '24px',
+                    padding: '0 10px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    background: 'rgba(148, 163, 184, 0.1)',
+                    color: '#94a3b8',
+                    border: '1px solid rgba(148, 163, 184, 0.2)',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  Hủy
+                </button>
+                <button
+                  onClick={saveCreate}
+                  style={{
+                    height: '24px',
+                    padding: '0 12px',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    background: 'var(--color-primary)',
+                    color: '#0b0f17',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  Tạo
+                </button>
               </div>
             </div>
           )}
@@ -1131,6 +1283,38 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
             <span>🤖</span> API Auto Test Studio
           </button>
         )}
+        {onOpenUserGuide && (
+          <button
+            onClick={onOpenUserGuide}
+            title="Mở tài liệu hướng dẫn sử dụng toàn diện"
+            style={{
+              width: '100%',
+              padding: '6px 10px',
+              borderRadius: '6px',
+              background: 'rgba(56, 189, 248, 0.08)',
+              border: '1px solid rgba(56, 189, 248, 0.25)',
+              color: '#38bdf8',
+              fontSize: '12px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'rgba(56, 189, 248, 0.16)';
+              e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.4)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'rgba(56, 189, 248, 0.08)';
+              e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.25)';
+            }}
+          >
+            <span>📖</span> Hướng Dẫn Sử Dụng
+          </button>
+        )}
         {onOpenEnvModal && (
           <button
             onClick={onOpenEnvModal}
@@ -1189,7 +1373,8 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
       </div>
 
       {/* Action Hover Styles */}
-      <style dangerouslySetInnerHTML={{__html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         .sidebar-row:hover {
           background-color: var(--bg-card-hover) !important;
         }

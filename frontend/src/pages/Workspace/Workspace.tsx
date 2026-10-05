@@ -14,6 +14,8 @@ interface WorkspaceProps {
   setIsAutomationModalOpen?: (open: boolean) => void;
   isUITestModalOpen?: boolean;
   setIsUITestModalOpen?: (open: boolean) => void;
+  isUserGuideOpen?: boolean;
+  setIsUserGuideOpen?: (open: boolean) => void;
 }
 
 export default function Workspace({
@@ -22,7 +24,9 @@ export default function Workspace({
   isAutomationModalOpen,
   setIsAutomationModalOpen,
   isUITestModalOpen,
-  setIsUITestModalOpen
+  setIsUITestModalOpen,
+  isUserGuideOpen,
+  setIsUserGuideOpen
 }: WorkspaceProps) {
   const { 
     tabs, activeTabId, setActiveTabId, createNewTab, closeTab, activeTab, reorderTabs
@@ -251,6 +255,7 @@ export default function Workspace({
               onOpenEnvModal={() => setEnvOpen(true)}
               onOpenAutomationModal={() => setAutoOpen(true)}
               onOpenMockModal={() => setIsMockModalOpen(true)}
+              onOpenUserGuide={() => (setIsUserGuideOpen ? setIsUserGuideOpen(true) : null)}
             />
           </div>
 

@@ -3,6 +3,7 @@ import Sidebar from '../components/Sidebar/Sidebar';
 import Workspace from '../pages/Workspace/Workspace';
 import UpdateModal, { UpdateInfo, UpdatePhase } from '../components/UpdateModal/UpdateModal';
 import UITestModal from '../components/UITestModal/UITestModal';
+import UserGuideModal from '../components/UserGuideModal/UserGuideModal';
 
 // Wails-generated bindings
 import {
@@ -26,6 +27,7 @@ export default function MainLayout() {
   const [isEnvModalOpen, setIsEnvModalOpen] = useState(false);
   const [isAutomationModalOpen, setIsAutomationModalOpen] = useState(false);
   const [isUITestModalOpen, setIsUITestModalOpen] = useState(false);
+  const [isUserGuideOpen, setIsUserGuideOpen] = useState(false);
 
   // ── Update state ──────────────────────────────────────────────────────────
   const [updateInfo, setUpdateInfo]         = useState<UpdateInfo | null>(null);
@@ -141,6 +143,7 @@ export default function MainLayout() {
           onOpenEnvModal={() => setIsEnvModalOpen(true)}
           onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
           onOpenUITestModal={() => setIsUITestModalOpen(true)}
+          onOpenUserGuide={() => setIsUserGuideOpen(true)}
         />
       </div>
 
@@ -159,6 +162,8 @@ export default function MainLayout() {
           setIsAutomationModalOpen={setIsAutomationModalOpen}
           isUITestModalOpen={isUITestModalOpen}
           setIsUITestModalOpen={setIsUITestModalOpen}
+          isUserGuideOpen={isUserGuideOpen}
+          setIsUserGuideOpen={setIsUserGuideOpen}
         />
       </div>
 
@@ -166,6 +171,12 @@ export default function MainLayout() {
       <UITestModal
         isOpen={isUITestModalOpen}
         onClose={() => setIsUITestModalOpen(false)}
+      />
+
+      {/* User Guide & Documentation Modal */}
+      <UserGuideModal
+        isOpen={isUserGuideOpen}
+        onClose={() => setIsUserGuideOpen(false)}
       />
 
       {/* Update Modal — hiển thị khi có bản mới */}
@@ -182,4 +193,4 @@ export default function MainLayout() {
       )}
     </div>
   );
-}
+}

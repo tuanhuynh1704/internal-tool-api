@@ -10,9 +10,10 @@ interface RequestPanelProps {
   onOpenEnvModal?: () => void;
   onOpenAutomationModal?: () => void;
   onOpenMockModal?: () => void;
+  onOpenUserGuide?: () => void;
 }
 
-export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpenAutomationModal, onOpenMockModal }: RequestPanelProps) {
+export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpenAutomationModal, onOpenMockModal, onOpenUserGuide }: RequestPanelProps) {
   const { 
     activeTab, updateActiveTab, loading, handleSendRequest,
     environments, activeEnvId, setActiveEnvId,
@@ -507,6 +508,30 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
             >
               <span>💻</span> Code
             </button>
+            {onOpenUserGuide && (
+              <>
+                <div style={{ width: '1px', height: '14px', background: 'var(--border-subtle)' }} />
+                <button
+                  type="button"
+                  onClick={onOpenUserGuide}
+                  style={{
+                    padding: '4px 8px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#38bdf8',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    cursor: 'pointer'
+                  }}
+                  title="Mở hướng dẫn sử dụng & cẩm nang tra cứu"
+                >
+                  <span>📖</span> Hướng dẫn
+                </button>
+              </>
+            )}
           </div>
 
           {/* Group 3: Test & Studio Tools Dropdown */}
@@ -647,8 +672,43 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                     </div>
                   </button>
                 )}
+
+                {onOpenUserGuide && (
+                  <>
+                    <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsToolsDropdownOpen(false);
+                        onOpenUserGuide();
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '8px',
+                        padding: '8px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        borderRadius: '6px',
+                        color: 'var(--text-main)',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        transition: 'background 0.12s ease'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.12)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span style={{ fontSize: '16px', lineHeight: 1 }}>📖</span>
+                      <div>
+                        <div style={{ fontSize: '12px', fontWeight: 600, color: '#38bdf8' }}>Hướng Dẫn Sử Dụng</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>Cẩm nang thao tác & phím tắt toàn cục</div>
+                      </div>
+                    </button>
+                  </>
+                )}
               </div>
             )}
+
           </div>
 
         </div>
