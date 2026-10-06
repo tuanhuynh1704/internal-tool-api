@@ -815,7 +815,7 @@ export default function UserGuideModal({ isOpen, onClose, initialTopicId }: User
               </div>
             </div>
             <a
-              href="https://tuanshuynh.github.io/buy-me-coffee/"
+              href="https://tuanhuynh1704.github.io/buy-me-coffee/"
               target="_blank"
               rel="noreferrer"
               style={{

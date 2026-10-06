@@ -1,12 +1,15 @@
 import React from 'react';
 import { AppProvider } from './context/AppContext';
 import MainLayout from './layouts/MainLayout';
+import ErrorBoundary from './components/common/ErrorBoundary';
 
 export default function App() {
   return (
-    <AppProvider>
-      <MainLayout />
-    </AppProvider>
+    <ErrorBoundary fallbackTitle="Đã xảy ra sự cố giao diện">
+      <AppProvider>
+        <MainLayout />
+      </AppProvider>
+    </ErrorBoundary>
   );
 }
 

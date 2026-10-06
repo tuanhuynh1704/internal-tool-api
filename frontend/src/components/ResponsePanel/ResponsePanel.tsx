@@ -1,19 +1,70 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Editor } from '@monaco-editor/react';
+import { BrowserOpenURL } from '../../../wailsjs/runtime/runtime';
+import HtmlFieldsInspector, { parseHtmlFormSummary } from './HtmlFieldsInspector';
 
 export default function ResponsePanel() {
-  const { activeTab, loading, handleStopStream } = useApp();
-  const [formatMode, setFormatMode] = useState<'pretty' | 'raw' | 'preview'>('pretty');
-  const [activeTabSub, setActiveTabSub] = useState<'body' | 'headers' | 'timing' | 'assertions' | 'stream'>('body');
+  const { activeTab, loading, handleStopStream, buildFullUrl } = useApp();
+  const [formatMode, setFormatMode] = useState<'pretty' | 'raw'>('pretty');
+  const [activeTabSub, setActiveTabSub] = useState<'body' | 'preview' | 'html-fields' | 'headers' | 'timing' | 'assertions' | 'stream'>('body');
+  const [previewDeviceWidth, setPreviewDeviceWidth] = useState<'100%' | '768px' | '390px'>('100%');
   const [copied, setCopied] = useState(false);
 
-  if (!activeTab) return null;
-  const { response, assertionResults = [], isStreaming = false, streamingActive = false, streamChunks = [] } = activeTab;
+  const response = activeTab?.response;
+  const assertionResults = activeTab?.assertionResults || [];
+  const isStreaming = activeTab?.isStreaming || false;
+  const streamingActive = activeTab?.streamingActive || false;
+  const streamChunks = activeTab?.streamChunks || [];
+
+  const resBody = useMemo(() => {
+    if (response) return typeof response.body === 'string' ? response.body : String(response.body || '');
+    if (streamChunks && streamChunks.length > 0) return streamChunks.map(c => c.data).join('');
+    return '';
+  }, [response, streamChunks]);
+
+  const contentType = useMemo(() => {
+    if (!response?.headers) return '';
+    const found = Object.entries(response.headers).find(([k]) => k.toLowerCase() === 'content-type');
+    return found ? found[1] : '';
+  }, [response]);
+
+  const isHtml = useMemo(() => {
+    const trimmed = resBody.trim();
+    return contentType.includes('html') || 
+      trimmed.startsWith('<!DOCTYPE') || 
+      trimmed.startsWith('<!doctype') || 
+      trimmed.startsWith('<html') || 
+      trimmed.toLowerCase().includes('<html') ||
+      trimmed.toLowerCase().includes('<!doctype html');
+  }, [contentType, resBody]);
+
+  const htmlFieldsSummary = useMemo(() => {
+    return isHtml ? parseHtmlFormSummary(resBody) : null;
+  }, [isHtml, resBody]);
+
+  const fullUrl = activeTab ? buildFullUrl(activeTab) : '';
+
+  // Strip scripts and meta refresh so iframe CAN NEVER hijack or navigate the parent app window (window.top)
+  const safePreviewHtml = useMemo(() => {
+    if (!resBody) return '';
+    let safe = resBody.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+    safe = safe.replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*>/gi, '');
+    if (fullUrl) {
+      if (!safe.includes('<base ') && safe.includes('<head>')) {
+        safe = safe.replace('<head>', `<head><base href="${fullUrl}" />`);
+      } else if (!safe.includes('<base ') && safe.includes('<html>')) {
+        safe = safe.replace('<html>', `<html><head><base href="${fullUrl}" /></head>`);
+      }
+    }
+    return safe;
+  }, [resBody, fullUrl]);
 
   const assertionPassedCount = assertionResults.filter(r => r.passed).length;
   const hasAssertions = assertionResults.length > 0;
   const allAssertionsPassed = hasAssertions && assertionPassedCount === assertionResults.length;
+
+  if (!activeTab) return null;
 
   if (loading && !isStreaming) {
     return (
@@ -41,7 +92,8 @@ export default function ResponsePanel() {
         <span style={{ fontSize: '13px', color: 'var(--color-primary)', fontWeight: 600 }}>
           Đang gửi request và đợi phản hồi từ máy chủ...
         </span>
-        <style dangerouslySetInnerHTML={{__html: `
+        <style dangerouslySetInnerHTML={{
+          __html: `
           @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         `}} />
       </div>
@@ -75,8 +127,6 @@ export default function ResponsePanel() {
     );
   }
 
-  const resBody = response ? response.body : streamChunks.map(c => c.data).join('');
-  const isHtml = resBody.trim().startsWith('<');
   let displayBody = resBody;
   if (formatMode === 'pretty') {
     try {
@@ -241,7 +291,7 @@ export default function ResponsePanel() {
 
         {/* Right Tools & Mode switch */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {/* Pretty / Raw / Preview toggle */}
+          {/* Pretty / Raw toggle (for Response Body Code) */}
           <div style={{ display: 'flex', background: 'var(--bg-app)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-card)' }}>
             <button
               onClick={() => { setFormatMode('pretty'); setActiveTabSub('body'); }}
@@ -271,22 +321,67 @@ export default function ResponsePanel() {
             >
               Raw
             </button>
-            <button
-              onClick={() => { setFormatMode('preview'); setActiveTabSub('body'); }}
-              style={{
-                padding: '2px 8px',
-                fontSize: '11px',
-                borderRadius: '4px',
-                background: formatMode === 'preview' && activeTabSub === 'body' ? 'var(--color-primary)' : 'transparent',
-                color: formatMode === 'preview' && activeTabSub === 'body' ? '#0b0f17' : 'var(--text-muted)',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              Preview
-            </button>
           </div>
 
+          {/* Quick Module Switchers for HTML responses */}
+          {isHtml && (
+            <div style={{ display: 'flex', gap: '4px' }}>
+              <button
+                onClick={() => setActiveTabSub('preview')}
+                title="Xem giao diện Website trực quan trong khu vực kết quả"
+                style={{
+                  padding: '2px 8px',
+                  fontSize: '11px',
+                  borderRadius: '6px',
+                  background: activeTabSub === 'preview' ? 'var(--color-primary)' : 'rgba(56, 189, 248, 0.1)',
+                  color: activeTabSub === 'preview' ? '#0b0f17' : '#38bdf8',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <span>🌐 Website</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTabSub('html-fields')}
+                title="Tổng hợp các trường nhập liệu trong HTML"
+                style={{
+                  padding: '2px 8px',
+                  fontSize: '11px',
+                  borderRadius: '6px',
+                  background: activeTabSub === 'html-fields' ? '#38bdf8' : 'rgba(56, 189, 248, 0.08)',
+                  color: activeTabSub === 'html-fields' ? '#0b0f17' : '#38bdf8',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <span>📋 Form Fields</span>
+                {htmlFieldsSummary && htmlFieldsSummary.totalFieldsCount > 0 && (
+                  <span style={{
+                    fontSize: '9.5px',
+                    fontWeight: 800,
+                    padding: '0 4px',
+                    borderRadius: '6px',
+                    background: activeTabSub === 'html-fields' ? 'rgba(0,0,0,0.25)' : 'rgba(56, 189, 248, 0.25)',
+                    color: activeTabSub === 'html-fields' ? '#0b0f17' : '#38bdf8'
+                  }}>
+                    {htmlFieldsSummary.totalFieldsCount}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           {/* Copy response */}
           <button
             onClick={handleCopyResponse}
@@ -323,7 +418,7 @@ export default function ResponsePanel() {
         </div>
       </div>
 
-      {/* Subtabs Bar: Body | Headers | Timing | Assertions | Stream */}
+      {/* Subtabs Bar: Body | Website Preview | Form Fields | Headers | Timing | Assertions | Stream */}
       <div style={{
         display: 'flex',
         borderBottom: '1px solid var(--border-card)',
@@ -346,6 +441,59 @@ export default function ResponsePanel() {
         >
           Response Body
         </button>
+
+        {isHtml && (
+          <button
+            onClick={() => setActiveTabSub('preview')}
+            style={{
+              padding: '6px 12px',
+              background: 'transparent',
+              color: activeTabSub === 'preview' ? 'var(--color-primary)' : 'var(--text-muted)',
+              borderBottom: activeTabSub === 'preview' ? '2px solid var(--color-primary)' : '2px solid transparent',
+              fontSize: '12px',
+              fontWeight: activeTabSub === 'preview' ? 700 : 400,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <span>🌐 Xem Website (Preview)</span>
+          </button>
+        )}
+
+        {isHtml && (
+          <button
+            onClick={() => setActiveTabSub('html-fields')}
+            style={{
+              padding: '6px 12px',
+              background: 'transparent',
+              color: activeTabSub === 'html-fields' ? '#38bdf8' : 'var(--text-muted)',
+              borderBottom: activeTabSub === 'html-fields' ? '2px solid #38bdf8' : '2px solid transparent',
+              fontSize: '12px',
+              fontWeight: activeTabSub === 'html-fields' ? 700 : 400,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <span>📋 Trường nhập liệu HTML</span>
+            {htmlFieldsSummary && htmlFieldsSummary.totalFieldsCount > 0 && (
+              <span style={{
+                fontSize: '10px',
+                fontWeight: 700,
+                padding: '1px 6px',
+                borderRadius: '8px',
+                background: activeTabSub === 'html-fields' ? 'rgba(56, 189, 248, 0.25)' : 'rgba(148, 163, 184, 0.2)',
+                color: activeTabSub === 'html-fields' ? '#38bdf8' : '#cbd5e1'
+              }}>
+                {htmlFieldsSummary.totalFieldsCount}
+              </span>
+            )}
+          </button>
+        )}
+
         <button
           onClick={() => setActiveTabSub('headers')}
           style={{
@@ -360,6 +508,7 @@ export default function ResponsePanel() {
         >
           Response Headers ({responseHeadersList.length})
         </button>
+
         <button
           onClick={() => setActiveTabSub('timing')}
           style={{
@@ -434,38 +583,176 @@ export default function ResponsePanel() {
         )}
       </div>
 
-      {/* Body / Headers / Timing / Assertions / Stream Display */}
+      {/* Body / Website Preview / HTML Fields / Headers / Timing / Assertions / Stream Display */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {activeTabSub === 'body' && (
-          formatMode === 'preview' ? (
-            <div style={{ flex: 1, height: '100%', background: '#fff', borderRadius: '4px', overflow: 'hidden' }}>
-              <iframe
-                title="Response HTML Preview"
-                srcDoc={resBody}
-                sandbox="allow-same-origin"
-                style={{ width: '100%', height: '100%', border: 'none' }}
-              />
+          <div style={{ flex: 1, height: '100%', minHeight: 0 }}>
+            <Editor
+              height="100%"
+              width="100%"
+              defaultLanguage={isHtml ? "html" : "json"}
+              theme="vs-dark"
+              value={displayBody}
+              options={{
+                readOnly: true,
+                minimap: { enabled: false },
+                fontSize: 13,
+                lineNumbers: "on",
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                wordWrap: 'on'
+              }}
+            />
+          </div>
+        )}
+
+        {/* Website Preview Module (Isolated inside ResponsePanel) */}
+        {activeTabSub === 'preview' && (
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            background: '#0a0e17',
+            overflow: 'hidden'
+          }}>
+            {/* Top Toolbar */}
+            <div style={{
+              padding: '6px 12px',
+              background: '#0d131f',
+              borderBottom: '1px solid var(--border-card)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '8px',
+              flexWrap: 'wrap',
+              flexShrink: 0
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span>🌐</span> Module Hiển Thị Website
+                </span>
+                <span style={{
+                  fontSize: '10px',
+                  fontWeight: 600,
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  color: '#10b981',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  padding: '1px 6px',
+                  borderRadius: '4px'
+                }}>
+                  🛡️ Sandbox An Toàn (Đã cô lập chống chuyển hướng màn hình)
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ display: 'flex', background: '#050811', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-card)' }}>
+                  <button
+                    onClick={() => setPreviewDeviceWidth('100%')}
+                    style={{
+                      padding: '2px 7px',
+                      fontSize: '10.5px',
+                      fontWeight: 600,
+                      background: previewDeviceWidth === '100%' ? 'var(--color-primary)' : 'transparent',
+                      color: previewDeviceWidth === '100%' ? '#0b0f17' : 'var(--text-muted)',
+                      borderRadius: '3px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    100%
+                  </button>
+                  <button
+                    onClick={() => setPreviewDeviceWidth('768px')}
+                    style={{
+                      padding: '2px 7px',
+                      fontSize: '10.5px',
+                      fontWeight: 600,
+                      background: previewDeviceWidth === '768px' ? 'var(--color-primary)' : 'transparent',
+                      color: previewDeviceWidth === '768px' ? '#0b0f17' : 'var(--text-muted)',
+                      borderRadius: '3px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    768px
+                  </button>
+                  <button
+                    onClick={() => setPreviewDeviceWidth('390px')}
+                    style={{
+                      padding: '2px 7px',
+                      fontSize: '10.5px',
+                      fontWeight: 600,
+                      background: previewDeviceWidth === '390px' ? 'var(--color-primary)' : 'transparent',
+                      color: previewDeviceWidth === '390px' ? '#0b0f17' : 'var(--text-muted)',
+                      borderRadius: '3px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    390px
+                  </button>
+                </div>
+
+                {activeTab && (
+                  <button
+                    onClick={() => {
+                      const fullUrl = buildFullUrl(activeTab);
+                      if (fullUrl) BrowserOpenURL(fullUrl);
+                    }}
+                    title="Mở URL bằng trình duyệt mặc định ngoài Windows"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '3px 8px',
+                      borderRadius: '4px',
+                      background: 'rgba(56, 189, 248, 0.1)',
+                      border: '1px solid rgba(56, 189, 248, 0.3)',
+                      color: '#38bdf8',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <span>↗</span>
+                    <span>Mở trình duyệt ngoài</span>
+                  </button>
+                )}
+              </div>
             </div>
-          ) : (
-            <div style={{ flex: 1, height: '100%', minHeight: 0 }}>
-              <Editor
-                height="100%"
-                width="100%"
-                defaultLanguage={isHtml ? "html" : "json"}
-                theme="vs-dark"
-                value={displayBody}
-                options={{
-                  readOnly: true,
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  lineNumbers: "on",
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  wordWrap: 'on'
-                }}
-              />
+
+            {/* Sandboxed iframe viewport */}
+            <div style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              justifyContent: 'center',
+              background: '#0a0e17',
+              padding: previewDeviceWidth === '100%' ? '0' : '10px',
+              overflow: 'auto'
+            }}>
+              <div style={{
+                width: previewDeviceWidth,
+                maxWidth: '100%',
+                height: '100%',
+                background: '#fff',
+                borderRadius: previewDeviceWidth === '100%' ? '0' : '6px',
+                overflow: 'hidden',
+                boxShadow: previewDeviceWidth === '100%' ? 'none' : '0 6px 20px rgba(0, 0, 0, 0.4)',
+                border: previewDeviceWidth === '100%' ? 'none' : '1px solid rgba(255, 255, 255, 0.1)'
+              }}>
+                <iframe
+                  title="Response HTML Preview"
+                  srcDoc={safePreviewHtml}
+                  sandbox="allow-forms"
+                  style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
+                />
+              </div>
             </div>
-          )
+          </div>
+        )}
+
+        {/* HTML Input Fields Inspector Module */}
+        {activeTabSub === 'html-fields' && (
+          <HtmlFieldsInspector html={resBody} />
         )}
 
         {activeTabSub === 'headers' && (

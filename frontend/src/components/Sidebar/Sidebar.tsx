@@ -1340,8 +1340,8 @@ export default function Sidebar({ onOpenEnvModal, onOpenAutomationModal, onOpenU
 
         {/* Buy Me a Coffee Button */}
         <button
-          onClick={() => BrowserOpenURL('https://tuanshuynh.github.io/buy-me-coffee/')}
-          title="Ủng hộ tác giả qua Buy Me a Coffee (https://tuanshuynh.github.io/buy-me-coffee/)"
+          onClick={() => BrowserOpenURL('https://tuanhuynh1704.github.io/buy-me-coffee/')}
+          title="Ủng hộ tác giả qua Buy Me a Coffee (https://tuanhuynh1704.github.io/buy-me-coffee/)"
           style={{
             width: '100%',
             padding: '6px 10px',

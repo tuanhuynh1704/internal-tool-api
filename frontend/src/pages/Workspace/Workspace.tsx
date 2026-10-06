@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import RequestPanel from '../../components/RequestPanel/RequestPanel';
 import ResponsePanel from '../../components/ResponsePanel/ResponsePanel';
+import ErrorBoundary from '../../components/common/ErrorBoundary';
 import StressTestModal from '../../components/StressTestModal/StressTestModal';
 import EnvironmentModal from '../../components/EnvironmentModal/EnvironmentModal';
 import AutomationModal from '../../components/AutomationModal/AutomationModal';
@@ -294,7 +295,9 @@ export default function Workspace({
             flexDirection: 'column',
             overflow: 'hidden'
           }}>
-            <ResponsePanel />
+            <ErrorBoundary fallbackTitle="Lỗi hiển thị kết quả phản hồi (Response)">
+              <ResponsePanel />
+            </ErrorBoundary>
           </div>
         </div>
       ) : (
