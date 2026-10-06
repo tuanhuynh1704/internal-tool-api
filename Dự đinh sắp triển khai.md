@@ -285,12 +285,18 @@ Trong bảng `devices`, thêm trường `features` (dạng JSON Array hoặc Mul
 | Nguy cơ / Rủi ro | Giải pháp kỹ thuật áp dụng | Mức độ bảo vệ |
 | :--- | :--- | :--- |
 | **Chia sẻ file app sang máy khác dùng lậu** | Machine ID (Phần cứng) + Quản trị viên duyệt từng máy trên Dashboard. | ⭐⭐⭐⭐⭐ Tuyệt đối |
-| **Dùng ngoài văn phòng / rò rỉ mạng** | Ràng buộc dải IP văn phòng / VPN công ty. | ⭐⭐⭐⭐ Rất cao |
+| **Dùng ngoài văn phòng / rò rỉ mạng** | Ràng buộc dải IP văn phòng / VPN công ty / Dải Private IP Whitelist. | ⭐⭐⭐⭐ Rất cao |
 | **Nhân viên nghỉ việc / Máy bị đánh cắp** | Nút **"Remote Kill / Wipe"** từ Dashboard: Xóa dữ liệu & tự xóa file app từ xa. | ⭐⭐⭐⭐⭐ Tuyệt đối |
-| **Bị mở tool dịch ngược, soi RAM, debug** | **Anti-Debug API** + **Cơ chế cảm tử (Local Suicide)**: Phát hiện debugger tự dập app và hủy dữ liệu. | ⭐⭐⭐⭐ Rất cao |
+| **Bị mở tool dịch ngược, soi RAM, debug** | **Anti-Debug API** + **Cơ chế cảm tử (Local Suicide)**: Tự dập app và xóa file. | ⭐⭐⭐⭐ Rất cao |
 | **Đọc chuỗi kết nối / Đọc trộm code** | Build cờ `-ldflags="-s -w"`, dùng **Garble Obfuscator** mã hóa literals và làm rối hàm. | ⭐⭐⭐⭐ Rất cao |
+| **Decompile bóc tách thuật toán lõi** | **Cơ chế "Tách Não" (In-Memory Micro-Module)**: .exe rỗng, giải mã logic chạy thẳng trong RAM. | ⭐⭐⭐⭐⭐ Tuyệt đối |
+| **Clone ổ cứng / Giả lập phần cứng máy ảo** | **Chip TPM 2.0 (Hardware Security)**: Khóa mật mã vật lý không thể sao chép ra ngoài. | ⭐⭐⭐⭐⭐ Tuyệt đối |
+| **Inject DLL gian lận (Cheat Engine, Frida)** | **Windows Process Mitigation Policy**: Chặn can thiệp bộ nhớ từ cấp Kernel hệ điều hành. | ⭐⭐⭐⭐⭐ Tuyệt đối |
+| **Hacker cố tình bypass logic để dịch ngược** | **Bẫy Honeypot & Đầu Độc Ngược**: Trả dữ liệu giả (Poisoning), âm thầm gửi danh tính hacker về điện thoại. | ⭐⭐⭐⭐⭐ Tuyệt đối |
 | **Vá binary (Patching jnz/jmp để bẻ khóa)** | Hash kiểm tra toàn vẹn file (File Integrity Check) so khớp với chữ ký của Server. | ⭐⭐⭐⭐⭐ Tuyệt đối |
 | **Sử dụng chức năng trái thẩm quyền** | Phân quyền tính năng theo từng Machine ID (Granular Feature Flags) được ký trong JWT Token. | ⭐⭐⭐⭐⭐ Tuyệt đối |
+| **Ức chế vì phải chờ Admin duyệt thủ công** | **Mã QR Động (TOTP) + FaceID trên Mobile**: Quét mở khóa tức thì trong 2 giây. | ⭐⭐⭐⭐⭐ Hoàn hảo |
+
 
 ---
 
@@ -427,5 +433,71 @@ CREATE TABLE security_alerts (
 
 > **Bật Supabase Realtime:** Chỉ cần vào Supabase Dashboard bật tính năng **Realtime** cho bảng `devices` và `device_commands`. Cả Desktop App và Mobile App sẽ luôn đồng bộ trạng thái tức thì không có độ trễ!
 
+---
 
+## 11. Các Kỹ Thuật Phòng Thủ Chuyên Sâu Cấp Doanh Nghiệp & Quân Sự (Advanced & Military-Grade Defenses)
+
+Dưới đây là 5 chiến thuật bảo vệ phần mềm đỉnh cao được áp dụng trong các hệ thống chống gian lận game AAA (Vanguard, EasyAntiCheat), ngân hàng số và các giải pháp bản quyền phần mềm bảo mật cao:
+
+---
+
+### 11.1. Cơ Chế "Tách Não" (Dynamic In-Memory Micro-Module Execution)
+* **Điểm yếu của ứng dụng thông thường:** Dù có dùng `garble` làm rối mã thì toàn bộ thuật toán, hàm xử lý nghiệp vụ vẫn nằm trong file `.exe` trên ổ cứng người dùng. Một chuyên gia Reverse Engineering kiên trì sớm muộn cũng sẽ bóc tách được logic.
+* **Nguyên lý "Tách Não":**
+  - File `.exe` cài đặt trên máy người dùng chỉ là một **vỏ bọc rỗng (Shell Launcher)**. Nó hoàn toàn **không chứa các thuật toán hay nghiệp vụ quan trọng**.
+  - Khi khởi động và xác thực với Supabase thành công: Supabase truyền tải một khối **mã nhị phân vi mô đã được mã hóa theo phiên (Session-Encrypted Bytecode / Micro-DLL)** về RAM của máy tính.
+  - Tầng Go cấp phát một vùng nhớ an toàn (`VirtualAlloc` với quyền `PAGE_EXECUTE_READWRITE`), giải mã và thực thi trực tiếp các hàm cốt lõi **ngay trong RAM**.
+  - Khối mã này **hoàn toàn không bao giờ ghi xuống đĩa cứng**.
+  - Khi tắt app hoặc phát hiện can thiệp: Vùng nhớ bị ghi đè số 0 (`ZeroMemory`) và giải phóng lập tức. Kẻ dịch ngược dù có dump ổ cứng cũng chỉ thu được một file `.exe` rỗng ruột!
+
+---
+
+### 11.2. Xác Thực Cấp Tốc Qua QR Code Động (TOTP QR Handshake) & FaceID trên Mobile
+* **Vấn đề:** Khi nhân viên đổi vị trí (từ Nhà lên Công ty hoặc đi công tác), nếu Admin đang bận họp hoặc chưa kịp đọc thông báo thì nhân viên phải chờ, gây gián đoạn công việc.
+* **Cơ chế QR Code Động (Tương tự Zalo PC / Telegram Desktop / Steam Guard):**
+  - Thay vì chỉ ngồi chờ Admin phê duyệt từ xa: Màn hình khóa của Desktop App hiển thị một **mã QR động** (sử dụng thuật toán TOTP - mã thay đổi mỗi 30 giây một lần, chống việc chụp ảnh gửi cho người khác).
+  - Admin (hoặc chủ sở hữu máy) chỉ cần mở Mobile Admin App, đưa camera quét mã QR và chạm **FaceID / Vân tay**:
+  - Supabase Realtime xác nhận chữ ký sinh trắc học và phát lệnh mở khóa Desktop App trong vòng **chưa đầy 2 giây**!
+  - Vừa đảm bảo xác thực 2 yếu tố vật lý (2FA) tuyệt đối, vừa mang lại trải nghiệm công nghệ cực kỳ sang trọng và không gây ức chế.
+
+---
+
+### 11.3. Khóa Cứng Bằng Chip TPM 2.0 (Hardware-Rooted Identity) — Chống Fake Máy Ảo
+* **Vấn đề:** Các kỹ sư dịch ngược giỏi có thể dùng máy ảo (VMware, QEMU, KVM) để giả lập và can thiệp vào các thông số CPU ID, Serial Mainboard hoặc MAC Address hòng đánh lừa hệ thống cấp phép.
+* **Giải pháp Chip TPM 2.0 (Trusted Platform Module):**
+  - Hầu hết laptop và PC hiện đại (tiêu chuẩn bắt buộc của Windows 11) đều tích hợp sẵn chip bảo mật phần cứng **TPM 2.0**.
+  - Trong lần khởi động đầu tiên, ứng dụng yêu cầu chip TPM vật lý tạo ra một **Cặp Khóa Mật Mã Bất Đối Xứng (RSA/ECC Key Pair)**.
+  - Khóa riêng tư (Private Key) được bảo vệ và niêm phong **vĩnh viễn bên trong phần cứng của chip TPM**, hệ điều hành Windows không cho phép bất kỳ phần mềm nào trích xuất (export) khóa này ra file.
+  - Mọi gói tin xác thực gửi lên Supabase đều được ký số (Sign) bằng chip TPM này.
+  - **Hệ quả:** Kẻ gian có nhân bản (Clone) toàn bộ ổ cứng sang máy tính khác hoặc mang lên máy ảo chạy thì cũng không thể giả mạo được con chip TPM vật lý của máy gốc.
+
+---
+
+### 11.4. Bẫy Mồi Nhử & Đầu Độc Ngược Kẻ Dịch Ngược (Honeypot Logic & Poisoning)
+* **Vấn đề:** Nếu khi phát hiện Debugger mà app lập tức kích hoạt tự hủy (xóa file), kẻ tấn công sẽ biết ngay bẫy nằm ở đâu và lần sau họ sẽ chạy trong môi trường Snapshot cách ly để bẻ khóa tiếp.
+* **Chiến thuật "Thả Mồi Bắt Giặc":**
+  - Trong mã nguồn Go, cố tình để lại các hàm và chuỗi mồi nhử rất hấp dẫn nhưng không mã hóa:
+    `func BypassLicenseSecurityCheck() bool { return true }`
+    `func DumpAdminMasterPassword() string { ... }`
+  - Khi kẻ phân tích can thiệp (Hook / Patch) vào hàm này:
+    1. **Không tự hủy ngay:** App vẫn chạy bình thường để kẻ gian đắc ý tưởng rằng mình đã bẻ khóa thành công.
+    2. **Đầu độc dữ liệu (Poisoning):** Mọi hàm nghiệp vụ phía sau âm thầm chuyển sang chế độ trả về dữ liệu sai lệch toán học (Fake Data) hoặc các payload vô nghĩa, khiến kẻ gian tốn hàng tuần lễ phân tích trong ngõ cụt.
+    3. **Thu thập chứng cứ âm thầm:** App âm thầm trích xuất IP, tên user Windows, danh sách các tiến trình debug đang mở trên máy kẻ gian và gửi thẳng về điện thoại Admin để làm bằng chứng pháp lý hoặc truy vết nguồn rò rỉ.
+
+---
+
+### 11.5. Chặn Can Thiệp Bộ Nhớ Từ Cấp Kernel (Windows Process Mitigation Policies)
+* Thay vì chỉ viết code Go để kiểm tra `IsDebuggerPresent()`, ứng dụng có thể kích hoạt các chính sách bảo vệ tiến trình nâng cao của nhân hệ điều hành Windows (**Windows Exploit Guard**):
+  ```go
+  // Thiết lập chính sách bảo vệ tiến trình cấp hệ điều hành (Windows CGO / Win32 API):
+  // 1. Chỉ cho phép các file DLL có chữ ký số của Microsoft được load vào app
+  SetProcessMitigationPolicy(ProcessSignaturePolicy, &policySignature, sizeof(policySignature))
+  
+  // 2. Chặn việc Inject DLL lạ từ bên ngoài (Chặn Cheat Engine, Frida, Process Hacker)
+  SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy, &policyHandle, sizeof(policyHandle))
+  
+  // 3. Ngăn chặn Dynamic Code Modification (Chống sửa byte lệnh trong bộ nhớ)
+  SetProcessMitigationPolicy(ProcessDynamicCodePolicy, &policyDynamic, sizeof(policyDynamic))
+  ```
+* **Tác dụng vượt trội:** Khi các công cụ hack/hook cố gắng can thiệp (Inject DLL) vào app, chính **nhân hệ điều hành Windows (Kernel)** sẽ từ chối và chặn đứng ngay lập tức từ vòng ngoài, bảo vệ ứng dụng ở cấp độ sâu nhất của hệ điều hành.
 
