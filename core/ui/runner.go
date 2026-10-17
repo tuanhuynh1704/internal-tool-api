@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -15,14 +16,22 @@ import (
 // ProgressCallback is called when step status updates
 type ProgressCallback func(event StepProgressEvent)
 
+// activeRun holds the controls of one running scenario. The run ID guards
+// against a finishing run removing the handles of a newer run of the same
+// scenario.
+type activeRun struct {
+	runID  string
+	cancel context.CancelFunc
+	close  func()
+}
+
 // Runner coordinates UI test scenario execution
 type Runner struct {
 	engine     *BrowserEngine
 	screenshot *ScreenshotManager
 
 	activeMu sync.Mutex
-	cancels  map[string]context.CancelFunc
-	closers  map[string]func()
+	runs     map[string]*activeRun
 }
 
 // NewRunner creates a new Runner instance
@@ -36,23 +45,22 @@ func NewRunner(engine *BrowserEngine, sm *ScreenshotManager) *Runner {
 	return &Runner{
 		engine:     engine,
 		screenshot: sm,
-		cancels:    make(map[string]context.CancelFunc),
-		closers:    make(map[string]func()),
+		runs:       make(map[string]*activeRun),
 	}
 }
 
 // CancelRun cancels an actively running test scenario
 func (r *Runner) CancelRun(scenarioID string) {
 	r.activeMu.Lock()
-	defer r.activeMu.Unlock()
-	if cancel, exists := r.cancels[scenarioID]; exists {
-		log.Printf("[ui-runner] Cancelling scenario %s", scenarioID)
-		cancel()
-		delete(r.cancels, scenarioID)
+	run := r.runs[scenarioID]
+	r.activeMu.Unlock()
+	if run == nil {
+		return
 	}
-	if closeSession, exists := r.closers[scenarioID]; exists {
-		closeSession()
-		delete(r.closers, scenarioID)
+	log.Printf("[ui-runner] Cancelling scenario %s", scenarioID)
+	run.cancel()
+	if run.close != nil {
+		run.close()
 	}
 }
 
@@ -82,13 +90,16 @@ func (r *Runner) RunScenario(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	run := &activeRun{runID: runID, cancel: cancel}
 	r.activeMu.Lock()
-	r.cancels[scenario.ID] = cancel
+	r.runs[scenario.ID] = run
 	r.activeMu.Unlock()
 
 	defer func() {
 		r.activeMu.Lock()
-		delete(r.cancels, scenario.ID)
+		if current := r.runs[scenario.ID]; current != nil && current.runID == runID {
+			delete(r.runs, scenario.ID)
+		}
 		r.activeMu.Unlock()
 	}()
 
@@ -125,9 +136,6 @@ func (r *Runner) RunScenario(
 
 	// Ensure browser session is cleanly closed upon exit
 	defer func() {
-		r.activeMu.Lock()
-		delete(r.closers, scenario.ID)
-		r.activeMu.Unlock()
 		if page != nil {
 			_ = page.Close()
 		}
@@ -139,7 +147,7 @@ func (r *Runner) RunScenario(
 		}
 	}()
 	r.activeMu.Lock()
-	r.closers[scenario.ID] = func() {
+	run.close = func() {
 		if bCtx != nil {
 			_ = bCtx.Close()
 		}
@@ -211,7 +219,7 @@ func (r *Runner) RunScenario(
 		step := rawStep
 		step.Selector = interpolateVariables(step.Selector, envVars)
 		step.Value = interpolateVariables(step.Value, envVars)
-		step.ConfigJSON = interpolateVariables(step.ConfigJSON, envVars)
+		step.ConfigJSON = interpolateConfigJSON(step.ConfigJSON, envVars)
 
 		stepRes := StepExecutionResult{
 			StepID:    step.ID,
@@ -233,7 +241,7 @@ func (r *Runner) RunScenario(
 		}
 
 		stepStart := time.Now()
-		details, stepErr := ExecuteStep(page, step, resolvedBaseURL)
+		details, stepErr := ExecuteStep(ctx, page, step, resolvedBaseURL)
 		stepDuration := time.Since(stepStart).Milliseconds()
 
 		stepRes.DurationMs = stepDuration
@@ -311,12 +319,39 @@ func (r *Runner) RunScenario(
 	return summary
 }
 
+// variablePattern matches {{ name }} with the same rules as the API runner, so
+// a variable name that works in API automation also works in UI tests.
+var variablePattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+
+// interpolateConfigJSON substitutes variables inside the string values of a
+// step's JSON config. Substituting into the raw JSON text would let a value
+// containing a quote or backslash corrupt the document.
+func interpolateConfigJSON(raw string, envVars map[string]string) string {
+	if strings.TrimSpace(raw) == "" || len(envVars) == 0 {
+		return raw
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return raw // ExecuteStep reports the invalid configuration
+	}
+	for key, value := range cfg {
+		if text, ok := value.(string); ok {
+			cfg[key] = interpolateVariables(text, envVars)
+		}
+	}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
+}
+
 // interpolateVariables replaces {{varName}} with matching value from envVars
 func interpolateVariables(text string, envVars map[string]string) string {
 	if text == "" || len(envVars) == 0 {
 		return text
 	}
-	re := regexp.MustCompile(`\{\{\s*([a-zA-Z0-9_\-\.]+)\s*\}\}`)
+	re := variablePattern
 	return re.ReplaceAllStringFunc(text, func(match string) string {
 		sub := re.FindStringSubmatch(match)
 		if len(sub) > 1 {

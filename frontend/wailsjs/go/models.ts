@@ -134,6 +134,9 @@ export namespace core {
 	    status: number;
 	    statusText: string;
 	    body: string;
+	    bodyBase64?: string;
+	    isBinary?: boolean;
+	    truncated?: boolean;
 	    headers: Record<string, string>;
 	    responseTimeMs: number;
 	    responseSizeByte: number;
@@ -148,6 +151,9 @@ export namespace core {
 	        this.status = source["status"];
 	        this.statusText = source["statusText"];
 	        this.body = source["body"];
+	        this.bodyBase64 = source["bodyBase64"];
+	        this.isBinary = source["isBinary"];
+	        this.truncated = source["truncated"];
 	        this.headers = source["headers"];
 	        this.responseTimeMs = source["responseTimeMs"];
 	        this.responseSizeByte = source["responseSizeByte"];
@@ -176,6 +182,7 @@ export namespace core {
 	    totalRequests: number;
 	    successCount: number;
 	    failureCount: number;
+	    abortedRequests: number;
 	    averageTimeMs: number;
 	    minTimeMs: number;
 	    maxTimeMs: number;
@@ -196,6 +203,7 @@ export namespace core {
 	        this.totalRequests = source["totalRequests"];
 	        this.successCount = source["successCount"];
 	        this.failureCount = source["failureCount"];
+	        this.abortedRequests = source["abortedRequests"];
 	        this.averageTimeMs = source["averageTimeMs"];
 	        this.minTimeMs = source["minTimeMs"];
 	        this.maxTimeMs = source["maxTimeMs"];
@@ -402,6 +410,30 @@ export namespace main {
 		}
 	}
 	
+	export class DBActivityHistory {
+	    id: string;
+	    method: string;
+	    url: string;
+	    status: number;
+	    duration: number;
+	    timestamp: string;
+	    createdAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DBActivityHistory(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.method = source["method"];
+	        this.url = source["url"];
+	        this.status = source["status"];
+	        this.duration = source["duration"];
+	        this.timestamp = source["timestamp"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
 	export class DBEnvVariable {
 	    id: string;
 	    key: string;
@@ -503,6 +535,7 @@ export namespace main {
 	    authType: string;
 	    authToken: string;
 	    authConfigJson: string;
+	    assertionsJson: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new DBRequest(source);
@@ -526,6 +559,7 @@ export namespace main {
 	        this.authType = source["authType"];
 	        this.authToken = source["authToken"];
 	        this.authConfigJson = source["authConfigJson"];
+	        this.assertionsJson = source["assertionsJson"];
 	    }
 	}
 	export class DBScenarioStep {
@@ -796,6 +830,26 @@ export namespace main {
 	        this.duration = source["duration"];
 	    }
 	}
+	export class DBWorkspaceSession {
+	    activeTabId: string;
+	    openTabIds: string[];
+	    activeEnvId: string;
+	    activeProjectId: string;
+	    activeSidebarTab: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DBWorkspaceSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.activeTabId = source["activeTabId"];
+	        this.openTabIds = source["openTabIds"];
+	        this.activeEnvId = source["activeEnvId"];
+	        this.activeProjectId = source["activeProjectId"];
+	        this.activeSidebarTab = source["activeSidebarTab"];
+	    }
+	}
 	export class PostmanImportResult {
 	    projectId: string;
 	    projectName: string;
@@ -862,6 +916,26 @@ export namespace main {
 	        this.phase = source["phase"];
 	        this.percent = source["percent"];
 	        this.errorMsg = source["errorMsg"];
+	    }
+	}
+	export class WorkspaceImportResult {
+	    projects: number;
+	    folders: number;
+	    requests: number;
+	    environments: number;
+	    scenarios: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkspaceImportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.projects = source["projects"];
+	        this.folders = source["folders"];
+	        this.requests = source["requests"];
+	        this.environments = source["environments"];
+	        this.scenarios = source["scenarios"];
 	    }
 	}
 

@@ -31,9 +31,9 @@ export default function UIRunnerPanel({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: '#070b12',
+        background: 'var(--bg-card)',
         borderRadius: '8px',
-        border: '1px solid #1e293b',
+        border: '1px solid var(--border-card)',
         overflow: 'hidden'
       }}
     >
@@ -41,8 +41,8 @@ export default function UIRunnerPanel({
       <div
         style={{
           padding: '12px 16px',
-          background: '#0f172a',
-          borderBottom: '1px solid #1e293b',
+          background: 'var(--bg-surface-secondary)',
+          borderBottom: '1px solid var(--border-subtle)',
           display: 'flex',
           flexDirection: 'column',
           gap: '10px'
@@ -51,7 +51,7 @@ export default function UIRunnerPanel({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontSize: '16px' }}>⚡</span>
-            <span style={{ fontWeight: 700, fontSize: '13px', color: '#f8fafc' }}>
+            <span style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-main)' }}>
               {isRunning ? 'Running UI Test Flow...' : summary ? 'Execution Result' : 'Ready to Run'}
             </span>
             {summary && (
@@ -63,7 +63,7 @@ export default function UIRunnerPanel({
                   padding: '2px 8px',
                   borderRadius: '12px',
                   background: summary.status === 'PASSED' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
-                  color: summary.status === 'PASSED' ? '#34d399' : '#f87171',
+                  color: summary.status === 'PASSED' ? '#10b981' : '#ef4444',
                   border: summary.status === 'PASSED' ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)'
                 }}
               >
@@ -73,10 +73,10 @@ export default function UIRunnerPanel({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12px' }}>
-            <span style={{ color: '#34d399', fontWeight: 600 }}>✓ {passedCount} Passed</span>
-            <span style={{ color: '#f87171', fontWeight: 600 }}>✕ {failedCount} Failed</span>
+            <span style={{ color: '#10b981', fontWeight: 600 }}>✓ {passedCount} Passed</span>
+            <span style={{ color: '#ef4444', fontWeight: 600 }}>✕ {failedCount} Failed</span>
             {summary && (
-              <span style={{ color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
+              <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                 ⏱️ {summary.durationMs}ms
               </span>
             )}
@@ -84,12 +84,12 @@ export default function UIRunnerPanel({
         </div>
 
         {/* Progress Bar */}
-        <div style={{ width: '100%', height: '4px', background: '#1e293b', borderRadius: '2px', overflow: 'hidden' }}>
+        <div style={{ width: '100%', height: '4px', background: 'var(--border-subtle)', borderRadius: '2px', overflow: 'hidden' }}>
           <div
             style={{
               width: `${percent}%`,
               height: '100%',
-              background: failedCount > 0 ? '#ef4444' : isRunning ? '#38bdf8' : '#10b981',
+              background: failedCount > 0 ? '#ef4444' : isRunning ? 'var(--color-primary)' : '#10b981',
               transition: 'width 0.2s ease'
             }}
           />
@@ -106,7 +106,7 @@ export default function UIRunnerPanel({
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#64748b',
+              color: 'var(--text-muted)',
               gap: '8px'
             }}
           >
@@ -126,8 +126,8 @@ export default function UIRunnerPanel({
               <div
                 key={res.stepId || idx}
                 style={{
-                  background: isFailed ? 'rgba(239, 68, 68, 0.08)' : isPassed ? 'rgba(16, 185, 129, 0.05)' : '#0f172a',
-                  border: isFailed ? '1px solid rgba(239, 68, 68, 0.3)' : isPassed ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid #1e293b',
+                  background: isFailed ? 'rgba(239, 68, 68, 0.08)' : isPassed ? 'rgba(16, 185, 129, 0.05)' : 'var(--bg-input)',
+                  border: isFailed ? '1px solid rgba(239, 68, 68, 0.3)' : isPassed ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid var(--border-card)',
                   borderRadius: '6px',
                   padding: '10px 14px',
                   display: 'flex',
@@ -139,12 +139,12 @@ export default function UIRunnerPanel({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '13px' }}>
-                      {isPassed && <span style={{ color: '#34d399', fontWeight: 800 }}>✓</span>}
-                      {isFailed && <span style={{ color: '#f87171', fontWeight: 800 }}>✕</span>}
-                      {isSkipped && <span style={{ color: '#64748b' }}>⏭️</span>}
-                      {isCurrent && <span style={{ color: '#38bdf8' }}>⏳</span>}
+                      {isPassed && <span style={{ color: '#10b981', fontWeight: 800 }}>✓</span>}
+                      {isFailed && <span style={{ color: '#ef4444', fontWeight: 800 }}>✕</span>}
+                      {isSkipped && <span style={{ color: 'var(--text-dim)' }}>⏭️</span>}
+                      {isCurrent && <span style={{ color: 'var(--color-primary)' }}>⏳</span>}
                     </span>
-                    <span style={{ fontWeight: 600, fontSize: '12.5px', color: isFailed ? '#f87171' : '#f8fafc' }}>
+                    <span style={{ fontWeight: 600, fontSize: '12.5px', color: isFailed ? '#ef4444' : 'var(--text-main)' }}>
                       {res.stepName || `Step ${idx + 1}`}
                     </span>
                   </div>

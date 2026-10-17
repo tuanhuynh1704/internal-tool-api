@@ -1,13 +1,16 @@
 package updater
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -15,36 +18,41 @@ const (
 	// checkTimeout is the HTTP timeout for fetching the update manifest.
 	checkTimeout = 15 * time.Second
 
-	// downloadTimeout is the HTTP timeout for downloading the binary.
-	// Set to 0 to disable timeout (handled at the streaming layer instead).
-	downloadTimeout  = 0
-	maxManifestBytes = 1 << 20
+	maxManifestBytes  = 1 << 20
+	maxSignatureBytes = 4 << 10
 )
 
-// CheckForUpdate fetches manifestURL, parses the JSON, and returns an UpdateInfo
-// if a newer version is available for the current platform.
+// CheckForUpdate fetches manifestURL and its detached signature, verifies the
+// signature against the embedded public keys, parses the JSON, and returns an
+// UpdateInfo if a newer version is available for the current platform.
 //
 // Returns (nil, nil) when the app is already up-to-date.
-// Returns (nil, err) on fetch/parse errors — callers should log and continue.
+// Returns (nil, err) on fetch/parse/signature errors — callers should log and continue.
 func CheckForUpdate(manifestURL, currentVersion string) (*UpdateInfo, error) {
-	client := &http.Client{Timeout: checkTimeout}
+	keys, err := TrustedManifestKeys()
+	if err != nil {
+		return nil, err
+	}
+	return checkForUpdate(&http.Client{Timeout: checkTimeout}, manifestURL, currentVersion, keys)
+}
 
-	resp, err := client.Get(manifestURL)
+func checkForUpdate(client *http.Client, manifestURL, currentVersion string, keys []ed25519.PublicKey) (*UpdateInfo, error) {
+	body, err := fetchSmall(client, manifestURL, maxManifestBytes)
 	if err != nil {
 		return nil, fmt.Errorf("fetch manifest: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("manifest server returned %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes+1))
+	sigURL, err := SignatureURL(manifestURL)
 	if err != nil {
-		return nil, fmt.Errorf("read manifest body: %w", err)
+		return nil, err
 	}
-	if len(body) > maxManifestBytes {
-		return nil, fmt.Errorf("manifest exceeds %d bytes", maxManifestBytes)
+	sig, err := fetchSmall(client, sigURL, maxSignatureBytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: fetch signature: %v", ErrManifestSignature, err)
+	}
+	// Verify the exact bytes before parsing anything: an unsigned manifest
+	// must not even influence the version comparison.
+	if err = VerifyManifestSignature(body, sig, keys); err != nil {
+		return nil, err
 	}
 
 	var manifest UpdateManifest
@@ -75,10 +83,40 @@ func CheckForUpdate(manifestURL, currentVersion string) (*UpdateInfo, error) {
 	}, nil
 }
 
-// NewDownloadClient returns an http.Client suitable for downloading large binaries.
-// No global timeout — the caller controls progress via context / cancellation.
+// fetchSmall GETs url and returns its body, refusing anything over limit bytes.
+func fetchSmall(client *http.Client, url string, limit int64) ([]byte, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned %d for %s", resp.StatusCode, url)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("response exceeds %d bytes", limit)
+	}
+	return body, nil
+}
+
+// NewDownloadClient returns an http.Client suitable for downloading large
+// binaries. Connection setup and the wait for response headers are bounded;
+// the body transfer is bounded by DownloadUpdate's context and stall watchdog.
 func NewDownloadClient() *http.Client {
-	return &http.Client{Timeout: downloadTimeout}
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			IdleConnTimeout:       30 * time.Second,
+		},
+	}
 }
 
 // LaunchUpdaterProcess extracts the embedded updater binary to a temp file and
@@ -90,7 +128,13 @@ func NewDownloadClient() *http.Client {
 //   - sourcePath:  path to the downloaded new binary
 //   - targetPath:  path to the current application executable
 //   - newTargetPath: path to the new renamed application executable
-func LaunchUpdaterProcess(updaterData []byte, appPID int, sourcePath, targetPath, newTargetPath string) error {
+//   - expectedSHA256: checksum the updater re-verifies right before installing
+func LaunchUpdaterProcess(updaterData []byte, appPID int, sourcePath, targetPath, newTargetPath, expectedSHA256 string) error {
+	// Re-check the downloaded file now: it sat in a temp directory since the
+	// download finished and could have been replaced in the meantime.
+	if err := VerifyFileSHA256(sourcePath, expectedSHA256); err != nil {
+		return fmt.Errorf("downloaded update failed verification: %w", err)
+	}
 	// Write updater binary to a temp file.
 	updaterPath, err := extractUpdater(updaterData)
 	if err != nil {
@@ -106,6 +150,7 @@ func LaunchUpdaterProcess(updaterData []byte, appPID int, sourcePath, targetPath
 		"--pid", fmt.Sprintf("%d", appPID),
 		"--source", sourcePath,
 		"--target", targetPath,
+		"--sha256", expectedSHA256,
 	}
 	if newTargetPath != "" && newTargetPath != targetPath {
 		args = append(args, "--new-target", newTargetPath)
@@ -126,7 +171,7 @@ func LaunchUpdaterProcess(updaterData []byte, appPID int, sourcePath, targetPath
 // extractUpdater writes the updater binary bytes to a temp file and returns its path.
 func extractUpdater(data []byte) (string, error) {
 	dir := TempDownloadDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
 
@@ -135,7 +180,7 @@ func extractUpdater(data []byte) (string, error) {
 		ext = ".exe"
 	}
 	name := fmt.Sprintf("internal-api-client-updater-%d%s", time.Now().UnixNano(), ext)
-	path := fmt.Sprintf("%s/%s", dir, name)
+	path := filepath.Join(dir, name)
 
 	if err := os.WriteFile(path, data, 0o755); err != nil {
 		return "", fmt.Errorf("write updater binary: %w", err)

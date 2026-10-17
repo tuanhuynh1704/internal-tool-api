@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestInterpolateVariables(t *testing.T) {
@@ -27,6 +29,36 @@ func TestInterpolateVariables(t *testing.T) {
 		if got != tc.expected {
 			t.Errorf("interpolateVariables(%q) = %q, expected %q", tc.input, got, tc.expected)
 		}
+	}
+}
+
+func TestInterpolateConfigJSONKeepsDocumentValid(t *testing.T) {
+	got := interpolateConfigJSON(`{"operator":"contains","filePath":"{{file}}"}`, map[string]string{"file": `C:\data\"quoted".txt`})
+	var cfg StepConfig
+	if err := json.Unmarshal([]byte(got), &cfg); err != nil {
+		t.Fatalf("config became invalid JSON: %v (%s)", err, got)
+	}
+	if cfg.FilePath != `C:\data\"quoted".txt` || cfg.Operator != "contains" {
+		t.Fatalf("unexpected config %+v", cfg)
+	}
+}
+
+func TestArtifactNamesAreUniqueWithinOneSecond(t *testing.T) {
+	sm := &ScreenshotManager{baseDir: t.TempDir()}
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		path := sm.GenerateScreenshotPath("scenario", "step")
+		if seen[path] {
+			t.Fatalf("duplicate screenshot path %s", path)
+		}
+		seen[path] = true
+		time.Sleep(time.Microsecond)
+	}
+}
+
+func TestCheckMatchRejectsUnknownOperator(t *testing.T) {
+	if checkMatch("abc", "b", "sounds_like") {
+		t.Fatal("unknown operator must not silently fall back to contains")
 	}
 }
 

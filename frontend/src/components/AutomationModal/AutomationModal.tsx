@@ -12,10 +12,12 @@ import {
   GetScenarioTestRuns, GetScenarioTestResults
 } from '../../../wailsjs/go/main/App';
 import { EventsOn, EventsOff } from '../../../wailsjs/runtime/runtime';
+import { confirmDialog, alertDialog, showToast } from '../common/Dialog';
 
 interface AutomationModalProps {
   isOpen: boolean;
   onClose: () => void;
+  isPage?: boolean;
 }
 
 const DEFAULT_DEMO_SCENARIO: ScenarioModel = {
@@ -126,7 +128,7 @@ const DEFAULT_DEMO_SCENARIO: ScenarioModel = {
   ]
 };
 
-export default function AutomationModal({ isOpen, onClose }: AutomationModalProps) {
+export default function AutomationModal({ isOpen, onClose, isPage = false }: AutomationModalProps) {
   useEscapeKey(onClose, isOpen);
 
   const { activeEnvId } = useApp();
@@ -151,8 +153,49 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
   const [savedRuns, setSavedRuns] = useState<any[]>([]);
   const [savedResults, setSavedResults] = useState<any[]>([]);
   const [selectedSavedRunId, setSelectedSavedRunId] = useState<string>('');
+  const [selectedSavedResultId, setSelectedSavedResultId] = useState<string>('');
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'passed' | 'failed'>('all');
+  const [historySearch, setHistorySearch] = useState<string>('');
+  const [historyBodyFormat, setHistoryBodyFormat] = useState<'pretty' | 'raw'>('pretty');
+  const [historyCopied, setHistoryCopied] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Edits are saved after a short debounce and strictly one after another:
+  // each save rewrites every step, so two overlapping saves could otherwise
+  // commit in the wrong order and leave an older version in the database.
+  const pendingScenarioSaves = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; scenario: ScenarioModel }>());
+  const scenarioSaveChain = useRef<Promise<void>>(Promise.resolve());
+
+  const writeScenario = (id: string): Promise<void> => {
+    const pending = pendingScenarioSaves.current.get(id);
+    if (pending) {
+      clearTimeout(pending.timer);
+      pendingScenarioSaves.current.delete(id);
+      scenarioSaveChain.current = scenarioSaveChain.current.then(() => saveScenarioToDB(pending.scenario));
+    }
+    return scenarioSaveChain.current;
+  };
+
+  const queueScenarioSave = (scenario: ScenarioModel) => {
+    const previous = pendingScenarioSaves.current.get(scenario.id);
+    if (previous) clearTimeout(previous.timer);
+    const timer = setTimeout(() => void writeScenario(scenario.id), 400);
+    pendingScenarioSaves.current.set(scenario.id, { timer, scenario });
+  };
+
+  const flushScenarioSaves = (): Promise<void> => {
+    Array.from(pendingScenarioSaves.current.keys()).forEach(id => void writeScenario(id));
+    return scenarioSaveChain.current;
+  };
+
+  // Persist pending edits when the modal closes or the component unmounts.
+  useEffect(() => {
+    if (!isOpen) void flushScenarioSaves();
+    return () => {
+      void flushScenarioSaves();
+    };
+  }, [isOpen]);
 
   // Load scenarios from DB on mount
   useEffect(() => {
@@ -263,7 +306,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
       const next = prev.map(s => s.id === activeScenarioId ? updater({ ...s }) : s);
       const updated = next.find(s => s.id === activeScenarioId);
       if (updated) {
-        saveScenarioToDB(updated);
+        queueScenarioSave(updated);
       }
       return next;
     });
@@ -393,13 +436,18 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
     }
   };
 
-  const handleFormatRequestBody = () => {
+  const handleFormatRequestBody = async () => {
     if (!currentStep || !currentStep.body || !currentStep.body.trim()) return;
     try {
       const parsed = JSON.parse(currentStep.body);
       updateCurrentStep({ body: JSON.stringify(parsed, null, 2) });
     } catch {
-      alert('Nội dung Request Body không phải là cú pháp JSON hợp lệ để làm đẹp!');
+      await alertDialog({
+        title: 'Cú pháp JSON không hợp lệ',
+        message: 'Nội dung Request Body không phải là cú pháp JSON hợp lệ để làm đẹp!',
+        variant: 'warning',
+        confirmText: 'Đã hiểu'
+      });
     }
   };
 
@@ -460,8 +508,22 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
   // Delete Scenario
   const handleDeleteScenario = async (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!window.confirm('Bạn có chắc chắn muốn xóa kịch bản kiểm thử này?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Xóa kịch bản kiểm thử',
+      message: 'Bạn có chắc chắn muốn xóa kịch bản kiểm thử này? Thao tác này không thể hoàn tác.',
+      variant: 'danger',
+      confirmText: 'Xóa kịch bản',
+      cancelText: 'Hủy'
+    });
+    if (!confirmed) return;
     try {
+      // A queued save must not re-create the scenario after it is deleted.
+      const pending = pendingScenarioSaves.current.get(id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingScenarioSaves.current.delete(id);
+      }
+      await scenarioSaveChain.current;
       await DeleteScenarioFromDB(id);
       const nextList = scenarios.filter(s => s.id !== id);
       setScenarios(nextList);
@@ -491,10 +553,15 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
   };
 
   // Delete Step
-  const handleDeleteStep = (idx: number, e: React.MouseEvent) => {
+  const handleDeleteStep = async (idx: number, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!currentScenario || currentScenario.steps.length <= 1) {
-      alert('Kịch bản cần có ít nhất một bước!');
+      await alertDialog({
+        title: 'Không thể xóa bước',
+        message: 'Kịch bản kiểm thử cần có ít nhất một bước!',
+        variant: 'warning',
+        confirmText: 'Đã hiểu'
+      });
       return;
     }
     const newSteps = currentScenario.steps.filter((_, i) => i !== idx);
@@ -566,9 +633,19 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
       setActiveScenarioId(newId);
       setSelectedStepIndex(0);
       saveScenarioToDB(importedScenario);
-      alert(`✓ Đã nhập thành công kịch bản "${importedScenario.name}" với ${steps.length} bước từ Excel!`);
+      await alertDialog({
+        title: 'Nhập kịch bản Excel thành công',
+        message: `✓ Đã nhập thành công kịch bản "${importedScenario.name}" với ${steps.length} bước từ Excel!`,
+        variant: 'success',
+        confirmText: 'Tuyệt vời'
+      });
     } catch (err: any) {
-      alert(`Lỗi khi đọc file Excel: ${err.message || String(err)}`);
+      await alertDialog({
+        title: 'Lỗi khi đọc file Excel',
+        message: `Lỗi khi đọc file Excel: ${err?.message || String(err)}`,
+        variant: 'error',
+        confirmText: 'Đóng'
+      });
     }
 
     if (fileInputRef.current) {
@@ -579,7 +656,12 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
   // RUN SCENARIO LOGIC
   const handleStartRun = async () => {
     if (!currentScenario || currentScenario.steps.length === 0) {
-      alert('Không có bước nào trong kịch bản để thực thi!');
+      await alertDialog({
+        title: 'Không có bước thực thi',
+        message: 'Không có bước nào trong kịch bản để thực thi!',
+        variant: 'warning',
+        confirmText: 'Đã hiểu'
+      });
       return;
     }
 
@@ -590,6 +672,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
     setInspectedStepResult(null);
 
     try {
+      // The backend runs the scenario stored in the DB: make sure the latest
+      // edits are committed first, otherwise an older version would run.
+      await flushScenarioSaves();
       const summary = await RunScenario(currentScenario.id, activeEnvId || '');
       const backendResults = summary.stepResults as unknown as StepExecutionResult[];
       const backendSummary = summary as unknown as ScenarioRunSummary;
@@ -617,19 +702,98 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
       setSavedRuns(runs || []);
       const runId = selectedSavedRunId && runs.some(r => r.id === selectedSavedRunId) ? selectedSavedRunId : runs[0]?.id;
       setSelectedSavedRunId(runId || '');
-      setSavedResults(runId ? await GetScenarioTestResults(runId) : []);
+      if (runId) {
+        const results = await GetScenarioTestResults(runId);
+        setSavedResults(results || []);
+        if (results && results.length > 0) {
+          setSelectedSavedResultId(results[0].id);
+        } else {
+          setSelectedSavedResultId('');
+        }
+      } else {
+        setSavedResults([]);
+        setSelectedSavedResultId('');
+      }
     } catch (error) { console.error('Load automation history failed:', error); }
   };
 
   const selectSavedRun = async (runId: string) => {
     setSelectedSavedRunId(runId);
-    try { setSavedResults(await GetScenarioTestResults(runId)); } catch (error) { console.error('Load saved automation results failed:', error); }
+    try {
+      const results = await GetScenarioTestResults(runId);
+      setSavedResults(results || []);
+      if (results && results.length > 0) {
+        setSelectedSavedResultId(results[0].id);
+      } else {
+        setSelectedSavedResultId('');
+      }
+    } catch (error) { console.error('Load saved automation results failed:', error); }
+  };
+
+  const formatDateTime = (dateStr: string) => {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      return d.toLocaleString('vi-VN', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        day: '2-digit', month: '2-digit', year: 'numeric'
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const getRelativeTime = (dateStr: string) => {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      const now = new Date();
+      const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
+      if (isNaN(diffSec)) return '';
+      if (diffSec < 60) return 'Vừa xong';
+      if (diffSec < 3600) return `${Math.floor(diffSec / 60)} phút trước`;
+      if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} giờ trước`;
+      return `${Math.floor(diffSec / 86400)} ngày trước`;
+    } catch {
+      return '';
+    }
+  };
+
+  const parseJsonSafe = (str: string, fallback: any = null) => {
+    if (!str || typeof str !== 'string') return fallback;
+    try {
+      return JSON.parse(str);
+    } catch {
+      return fallback;
+    }
+  };
+
+  const getHttpStatusBadge = (code: number) => {
+    if (!code) return { text: 'N/A', bg: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', border: 'rgba(148, 163, 184, 0.3)' };
+    if (code >= 200 && code < 300) {
+      return { text: `${code} OK`, bg: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: 'rgba(16, 185, 129, 0.35)' };
+    }
+    if (code >= 300 && code < 400) {
+      return { text: `${code} Redirect`, bg: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: 'rgba(56, 189, 248, 0.35)' };
+    }
+    if (code >= 400 && code < 500) {
+      return { text: `${code} Error`, bg: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', border: 'rgba(245, 158, 11, 0.35)' };
+    }
+    return { text: `${code} Fail`, bg: 'rgba(239, 68, 68, 0.15)', color: '#f87171', border: 'rgba(239, 68, 68, 0.35)' };
+  };
+
+  const handleCopyHistoryBody = (bodyStr: string) => {
+    if (!bodyStr) return;
+    navigator.clipboard.writeText(bodyStr);
+    setHistoryCopied(true);
+    setTimeout(() => setHistoryCopied(false), 2000);
   };
 
   if (!isOpen) return null;
 
   const getMethodBadgeStyle = (m: string) => {
-    switch (m.toUpperCase()) {
+    switch (m?.toUpperCase()) {
       case 'GET': return { color: '#38bdf8', background: 'rgba(56, 189, 248, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)' };
       case 'POST': return { color: '#10b981', background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)' };
       case 'PUT': return { color: '#f59e0b', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)' };
@@ -639,77 +803,92 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
     }
   };
 
-  return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(3, 7, 18, 0.85)',
-      backdropFilter: 'blur(10px)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1000,
-      padding: '24px'
-    }}>
-      {/* Hidden file input for Excel import */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleExcelFileImport}
-        accept=".xlsx,.xls"
-        style={{ display: 'none' }}
-      />
+  if (!isOpen) return null;
 
+  const modalContent = (
+    <div style={{
+      background: 'var(--bg-app)',
+      border: isPage ? 'none' : '1px solid var(--border-card)',
+      borderRadius: isPage ? 0 : '14px',
+      width: isPage ? '100%' : '1280px',
+      maxWidth: isPage ? '100%' : '96vw',
+      height: isPage ? '100%' : '92vh',
+      display: 'flex',
+      flexDirection: 'column',
+      boxShadow: isPage ? 'none' : '0 25px 60px -15px rgba(0, 0, 0, 0.9)',
+      overflow: 'hidden',
+      color: 'var(--text-main)'
+    }}>
+      {/* TOP HEADER */}
       <div style={{
-        background: '#0d1527',
-        border: '1px solid #1e293b',
-        borderRadius: '14px',
-        width: '1280px',
-        maxWidth: '96vw',
-        height: '92vh',
+        padding: isPage ? '12px 20px' : '14px 20px',
+        borderBottom: '1px solid var(--border-subtle)',
+        background: 'var(--bg-header-gradient)',
         display: 'flex',
-        flexDirection: 'column',
-        boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.9)',
-        overflow: 'hidden'
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexShrink: 0
       }}>
-        {/* TOP HEADER */}
-        <div style={{
-          padding: '14px 20px',
-          borderBottom: '1px solid #1e293b',
-          background: 'linear-gradient(90deg, #0b1329 0%, #0d1b38 50%, #091024 100%)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexShrink: 0
-        }}>
-          {/* Left branding & selector */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '24px' }}>🤖</span>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: '#f8fafc', letterSpacing: '0.5px' }}>
-                    Automation Test Suite
-                  </h2>
-                  <span style={{
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    background: 'rgba(56, 189, 248, 0.15)',
-                    color: '#38bdf8',
-                    padding: '2px 8px',
-                    borderRadius: '10px',
-                    border: '1px solid rgba(56, 189, 248, 0.3)'
-                  }}>
-                    Multi-step Runner
-                  </span>
-                </div>
-                <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                  Kiểm thử kịch bản tự động, trích xuất biến chuỗi và hỗ trợ bảng tính Excel (.xlsx)
-                </div>
+        {/* Left branding & selector */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          {isPage && (
+            <button
+              type="button"
+              onClick={onClose}
+              title="Quay lại API Client"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-card)',
+                color: 'var(--text-main)',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                transition: 'all 0.15s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--color-primary)';
+                e.currentTarget.style.color = 'var(--color-primary)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border-card)';
+                e.currentTarget.style.color = 'var(--text-main)';
+              }}
+            >
+              <span>←</span> API Client
+            </button>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '24px' }}>🤖</span>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: 'var(--text-main)', letterSpacing: '0.5px' }}>
+                  Automation Test Suite
+                </h2>
+                <span style={{
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  background: 'var(--color-primary-bg)',
+                  color: 'var(--color-primary)',
+                  padding: '2px 8px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(56, 189, 248, 0.3)'
+                }}>
+                  Multi-step Runner
+                </span>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                Kiểm thử kịch bản tự động, trích xuất biến chuỗi và hỗ trợ bảng tính Excel (.xlsx)
               </div>
             </div>
+          </div>
 
-            {/* Scenario Picker */}
+          {/* Scenario Picker */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '12px' }}>
               <select
                 value={activeScenarioId}
@@ -720,9 +899,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                   setRunSummary(null);
                 }}
                 style={{
-                  background: '#0a0f1d',
-                  color: '#f8fafc',
-                  border: '1px solid #334155',
+                  background: 'var(--bg-card)',
+                  color: 'var(--text-main)',
+                  border: '1px solid var(--border-card)',
                   borderRadius: '6px',
                   padding: '6px 12px',
                   fontSize: '12px',
@@ -741,8 +920,8 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                 onClick={handleCreateScenario}
                 title="Tạo kịch bản mới"
                 style={{
-                  background: 'rgba(56, 189, 248, 0.15)',
-                  color: '#38bdf8',
+                  background: 'var(--color-primary-bg)',
+                  color: 'var(--color-primary)',
                   border: '1px solid rgba(56, 189, 248, 0.3)',
                   padding: '6px 10px',
                   borderRadius: '6px',
@@ -785,8 +964,8 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'rgba(16, 185, 129, 0.15)',
-                color: '#10b981',
+                background: 'var(--method-get-bg)',
+                color: 'var(--method-get)',
                 border: '1px solid rgba(16, 185, 129, 0.35)',
                 padding: '6px 12px',
                 borderRadius: '6px',
@@ -805,9 +984,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'rgba(51, 65, 85, 0.6)',
-                color: '#cbd5e1',
-                border: '1px solid #334155',
+                background: 'var(--bg-card)',
+                color: 'var(--text-main)',
+                border: '1px solid var(--border-card)',
                 padding: '6px 12px',
                 borderRadius: '6px',
                 fontSize: '12px',
@@ -866,15 +1045,15 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
               style={{
                 background: 'transparent',
                 border: 'none',
-                color: '#94a3b8',
+                color: 'var(--text-muted)',
                 fontSize: '20px',
                 cursor: 'pointer',
                 padding: '4px 8px',
                 borderRadius: '6px',
                 marginLeft: '6px'
               }}
-              onMouseEnter={e => e.currentTarget.style.color = '#fff'}
-              onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
+              onMouseEnter={e => e.currentTarget.style.color = 'var(--text-main)'}
+              onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
             >
               ✕
             </button>
@@ -884,49 +1063,85 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
         {/* MODE SWITCHER TABS */}
         <div style={{
           display: 'flex',
-          background: '#090e1a',
-          borderBottom: '1px solid #1e293b',
-          padding: '0 16px'
+          background: 'var(--bg-tab-bar)',
+          borderBottom: '1px solid var(--border-subtle)',
+          padding: '6px 16px',
+          gap: '8px',
+          alignItems: 'center'
         }}>
           <button
             onClick={() => setActiveTab('builder')}
             style={{
-              padding: '10px 18px',
+              padding: '8px 16px',
               fontSize: '13px',
               fontWeight: 700,
-              background: 'transparent',
-              color: activeTab === 'builder' ? '#38bdf8' : '#94a3b8',
-              borderBottom: activeTab === 'builder' ? '2px solid #38bdf8' : '2px solid transparent',
-              cursor: 'pointer'
+              background: activeTab === 'builder' ? 'var(--color-primary-bg)' : 'transparent',
+              color: activeTab === 'builder' ? 'var(--color-primary)' : 'var(--text-muted)',
+              border: activeTab === 'builder' ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid transparent',
+              borderBottom: activeTab === 'builder' ? '2px solid var(--color-primary)' : '1px solid transparent',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.15s ease'
             }}
           >
-            🛠️ Dựng Kịch Bản (Scenario Builder)
+            <span>🛠️</span> Dựng Kịch Bản (Scenario Builder)
           </button>
           <button
             onClick={() => { setActiveTab('history'); loadSavedRuns(); }}
-            style={{ padding: '10px 18px', fontSize: '13px', fontWeight: 700, background: 'transparent', color: activeTab === 'history' ? '#38bdf8' : '#94a3b8', borderBottom: activeTab === 'history' ? '2px solid #38bdf8' : '2px solid transparent', cursor: 'pointer' }}
+            style={{
+              padding: '8px 16px',
+              fontSize: '13px',
+              fontWeight: 700,
+              background: activeTab === 'history' ? 'var(--color-primary-bg)' : 'transparent',
+              color: activeTab === 'history' ? 'var(--color-primary)' : 'var(--text-muted)',
+              border: activeTab === 'history' ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid transparent',
+              borderBottom: activeTab === 'history' ? '2px solid var(--color-primary)' : '1px solid transparent',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.15s ease'
+            }}
           >
-            🗂️ Lịch Sử ({savedRuns.length})
+            <span>🗂️</span> Lịch Sử
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              padding: '1px 7px',
+              borderRadius: '10px',
+              background: activeTab === 'history' ? 'rgba(56, 189, 248, 0.25)' : 'var(--bg-badge)',
+              color: activeTab === 'history' ? 'var(--color-primary)' : 'var(--text-muted)'
+            }}>
+              {savedRuns.length}
+            </span>
           </button>
           <button
             onClick={() => setActiveTab('runner')}
             style={{
-              padding: '10px 18px',
+              padding: '8px 16px',
               fontSize: '13px',
               fontWeight: 700,
-              background: 'transparent',
-              color: activeTab === 'runner' ? '#38bdf8' : '#94a3b8',
-              borderBottom: activeTab === 'runner' ? '2px solid #38bdf8' : '2px solid transparent',
+              background: activeTab === 'runner' ? 'var(--color-primary-bg)' : 'transparent',
+              color: activeTab === 'runner' ? 'var(--color-primary)' : 'var(--text-muted)',
+              border: activeTab === 'runner' ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid transparent',
+              borderBottom: activeTab === 'runner' ? '2px solid var(--color-primary)' : '1px solid transparent',
+              borderRadius: '6px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              gap: '6px',
+              transition: 'all 0.15s ease'
             }}
           >
-            📊 Bảng Thực Thi & Báo Cáo
+            <span>📊</span> Bảng Thực Thi & Báo Cáo
             {runSummary && (
               <span style={{
                 fontSize: '10px',
+                fontWeight: 700,
                 padding: '1px 6px',
                 borderRadius: '10px',
                 background: runSummary.passed ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
@@ -944,14 +1159,14 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
             {/* Left Sidebar: Steps list */}
             <div style={{
               width: '320px',
-              borderRight: '1px solid #1e293b',
-              background: '#0a0f1d',
+              borderRight: '1px solid var(--border-subtle)',
+              background: 'var(--bg-sidebar)',
               display: 'flex',
               flexDirection: 'column',
               flexShrink: 0
             }}>
               {/* Scenario Settings bar */}
-              <div style={{ padding: '12px', borderBottom: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ padding: '12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <input
                   type="text"
                   value={currentScenario.name}
@@ -961,10 +1176,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                     fontSize: '13px',
                     fontWeight: 700,
                     padding: '6px 10px',
-                    background: '#111827',
-                    border: '1px solid #334155',
+                    background: 'var(--bg-input)',
+                    border: '1px solid var(--border-card)',
                     borderRadius: '6px',
-                    color: '#f8fafc'
+                    color: 'var(--text-main)'
                   }}
                 />
                 <div style={{ display: 'flex', gap: '6px' }}>
@@ -977,19 +1192,19 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                       flex: 1,
                       fontSize: '11px',
                       padding: '4px 8px',
-                      background: '#111827',
-                      border: '1px solid #334155',
+                      background: 'var(--bg-input)',
+                      border: '1px solid var(--border-card)',
                       borderRadius: '4px',
-                      color: '#cbd5e1',
+                      color: 'var(--text-main)',
                       fontFamily: 'monospace'
                     }}
                   />
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#94a3b8' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
                     <input
                       type="number"
                       value={currentScenario.delayMs}
                       onChange={e => updateCurrentScenario(sc => ({ ...sc, delayMs: parseInt(e.target.value, 10) || 0 }))}
-                      style={{ width: '45px', padding: '3px', fontSize: '11px', background: '#111827', border: '1px solid #334155', color: '#fff', borderRadius: '4px' }}
+                      style={{ width: '45px', padding: '3px', fontSize: '11px', background: 'var(--bg-input)', border: '1px solid var(--border-card)', color: 'var(--text-main)', borderRadius: '4px' }}
                     />
                     ms
                   </div>
@@ -1002,16 +1217,16 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                borderBottom: '1px solid #1e293b'
+                borderBottom: '1px solid var(--border-subtle)'
               }}>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
                   Danh sách Bước ({currentScenario.steps.length})
                 </span>
                 <button
                   onClick={handleAddStep}
                   style={{
-                    background: 'rgba(56, 189, 248, 0.15)',
-                    color: '#38bdf8',
+                    background: 'var(--color-primary-bg)',
+                    color: 'var(--color-primary)',
                     border: '1px solid rgba(56, 189, 248, 0.3)',
                     padding: '3px 8px',
                     borderRadius: '4px',
@@ -1037,8 +1252,8 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                       style={{
                         padding: '8px 10px',
                         borderRadius: '6px',
-                        background: isSelected ? '#1e293b' : 'transparent',
-                        border: isSelected ? '1px solid #38bdf8' : '1px solid transparent',
+                        background: isSelected ? 'var(--bg-active)' : 'transparent',
+                        border: isSelected ? '1px solid var(--color-primary)' : '1px solid transparent',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
@@ -1060,7 +1275,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                         </span>
                         <span style={{
                           fontSize: '12px',
-                          color: isSelected ? '#ffffff' : '#cbd5e1',
+                          color: isSelected ? 'var(--text-main)' : 'var(--text-main)',
                           fontWeight: isSelected ? 600 : 400,
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
@@ -1076,7 +1291,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                           onClick={e => handleMoveStep(idx, 'up', e)}
                           title="Lên trên"
                           disabled={idx === 0}
-                          style={{ background: 'transparent', border: 'none', color: idx === 0 ? '#475569' : '#94a3b8', cursor: 'pointer', fontSize: '10px' }}
+                          style={{ background: 'transparent', border: 'none', color: idx === 0 ? 'var(--text-dim)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '10px' }}
                         >
                           ▲
                         </button>
@@ -1084,14 +1299,14 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                           onClick={e => handleMoveStep(idx, 'down', e)}
                           title="Xuống dưới"
                           disabled={idx === currentScenario.steps.length - 1}
-                          style={{ background: 'transparent', border: 'none', color: idx === currentScenario.steps.length - 1 ? '#475569' : '#94a3b8', cursor: 'pointer', fontSize: '10px' }}
+                          style={{ background: 'transparent', border: 'none', color: idx === currentScenario.steps.length - 1 ? 'var(--text-dim)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '10px' }}
                         >
                           ▼
                         </button>
                         <button
                           onClick={e => handleCloneStep(idx, e)}
                           title="Nhân bản bước này"
-                          style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '11px' }}
+                          style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px' }}
                         >
                           📋
                         </button>
@@ -1111,73 +1326,111 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
 
             {/* Right Editor for Active Step */}
             {currentStep ? (
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#0e1626' }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-app)' }}>
                 {/* Step Name & Method Bar */}
                 <div style={{
                   padding: '12px 16px',
-                  borderBottom: '1px solid #1e293b',
+                  borderBottom: '1px solid var(--border-subtle)',
                   display: 'flex',
+                  flexDirection: 'column',
                   gap: '10px',
-                  alignItems: 'center',
-                  background: '#0a0f1d'
+                  background: 'var(--bg-card)'
                 }}>
-                  <input
-                    type="text"
-                    value={currentStep.name}
-                    onChange={e => updateCurrentStep({ name: e.target.value })}
-                    placeholder="Tên bước kiểm thử..."
-                    style={{
-                      width: '240px',
-                      fontSize: '13px',
-                      fontWeight: 700,
-                      padding: '6px 10px',
-                      background: '#111827',
-                      border: '1px solid #334155',
-                      borderRadius: '6px',
-                      color: '#f8fafc'
-                    }}
-                  />
+                  {/* Row 1: Step Name */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', minWidth: '70px', letterSpacing: '0.5px' }}>
+                      Tên bước:
+                    </span>
+                    <input
+                      type="text"
+                      value={currentStep.name}
+                      onChange={e => updateCurrentStep({ name: e.target.value })}
+                      placeholder="Tên bước kiểm thử (e.g. Đăng nhập hệ thống, Tạo đơn hàng)..."
+                      style={{
+                        flex: 1,
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        padding: '7px 12px',
+                        background: 'var(--bg-input)',
+                        border: '1px solid var(--border-card)',
+                        borderRadius: '6px',
+                        color: 'var(--text-main)'
+                      }}
+                    />
+                  </div>
 
-                  <select
-                    value={currentStep.method}
-                    onChange={e => updateCurrentStep({ method: e.target.value })}
-                    style={{
-                      padding: '6px 10px',
-                      fontSize: '12px',
-                      fontWeight: 800,
-                      background: '#111827',
-                      color: '#38bdf8',
-                      border: '1px solid #334155',
-                      borderRadius: '6px'
-                    }}
-                  >
-                    <option value="GET">GET</option>
-                    <option value="POST">POST</option>
-                    <option value="PUT">PUT</option>
-                    <option value="DELETE">DELETE</option>
-                    <option value="PATCH">PATCH</option>
-                  </select>
-
-                  <input
-                    type="text"
-                    value={currentStep.apiPath}
-                    onChange={e => updateCurrentStep({ apiPath: e.target.value })}
-                    placeholder="/api/v1/resource hoặc https://..."
-                    style={{
+                  {/* Row 2: Unified Request Address Bar */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', minWidth: '70px', letterSpacing: '0.5px' }}>
+                      Endpoint:
+                    </span>
+                    <div style={{
                       flex: 1,
-                      fontSize: '12px',
-                      padding: '6px 10px',
-                      background: '#111827',
-                      border: '1px solid #334155',
+                      display: 'flex',
+                      background: 'var(--bg-input)',
+                      border: '1px solid var(--border-card)',
                       borderRadius: '6px',
-                      color: '#f8fafc',
-                      fontFamily: 'monospace'
-                    }}
-                  />
+                      overflow: 'hidden',
+                      alignItems: 'center'
+                    }}>
+                      <select
+                        value={currentStep.method}
+                        onChange={e => updateCurrentStep({ method: e.target.value })}
+                        style={{
+                          padding: '7px 14px',
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          background: 'var(--bg-card)',
+                          color: getMethodBadgeStyle(currentStep.method).color,
+                          border: 'none',
+                          borderRight: '1px solid var(--border-subtle)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <option value="GET">GET</option>
+                        <option value="POST">POST</option>
+                        <option value="PUT">PUT</option>
+                        <option value="DELETE">DELETE</option>
+                        <option value="PATCH">PATCH</option>
+                      </select>
+
+                      {currentScenario.baseUrl && (
+                        <span style={{
+                          padding: '0 10px',
+                          fontSize: '11.5px',
+                          color: 'var(--text-muted)',
+                          fontFamily: 'monospace',
+                          background: 'var(--bg-surface-secondary)',
+                          borderRight: '1px solid var(--border-subtle)',
+                          whiteSpace: 'nowrap',
+                          userSelect: 'none'
+                        }}>
+                          {currentScenario.baseUrl}
+                        </span>
+                      )}
+
+                      <input
+                        type="text"
+                        value={currentStep.apiPath}
+                        onChange={e => updateCurrentStep({ apiPath: e.target.value })}
+                        placeholder="/api/v1/resource hoặc https://..."
+                        style={{
+                          flex: 1,
+                          fontSize: '12px',
+                          padding: '7px 12px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-main)',
+                          fontFamily: 'monospace',
+                          outline: 'none'
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {/* Sub-tabs for Step details */}
-                <div style={{ display: 'flex', background: '#0a0f1d', borderBottom: '1px solid #1e293b', padding: '0 16px' }}>
+                <div style={{ display: 'flex', background: 'var(--bg-card)', borderBottom: '1px solid var(--border-subtle)', padding: '0 16px', gap: '8px' }}>
                   <button
                     onClick={() => setSelectedSubTab('request')}
                     style={{
@@ -1233,8 +1486,8 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                   <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     {/* Headers Editor Section */}
                     <div style={{
-                      background: '#090f1d',
-                      border: '1px solid #1e293b',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border-card)',
                       borderRadius: '8px',
                       padding: '12px',
                       display: 'flex',
@@ -1244,17 +1497,17 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                       {/* Top Bar for Headers */}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontSize: '13px', fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <span>📋</span> Headers gửi kèm
                           </span>
                           <span style={{
                             fontSize: '11px',
                             fontWeight: 600,
-                            background: currentStepHeaders.length > 0 ? 'rgba(56, 189, 248, 0.15)' : 'rgba(148, 163, 184, 0.1)',
-                            color: currentStepHeaders.length > 0 ? '#38bdf8' : '#94a3b8',
+                            background: currentStepHeaders.length > 0 ? 'var(--color-primary-bg)' : 'var(--bg-badge)',
+                            color: currentStepHeaders.length > 0 ? 'var(--color-primary)' : 'var(--text-muted)',
                             padding: '1px 7px',
                             borderRadius: '10px',
-                            border: `1px solid ${currentStepHeaders.length > 0 ? 'rgba(56, 189, 248, 0.3)' : 'rgba(148, 163, 184, 0.2)'}`
+                            border: `1px solid ${currentStepHeaders.length > 0 ? 'rgba(56, 189, 248, 0.3)' : 'var(--border-subtle)'}`
                           }}>
                             {currentStepHeaders.length} {currentStepHeaders.length === 1 ? 'header' : 'headers'}
                           </span>
@@ -1269,9 +1522,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                 onClick={() => handleAddHeaderRow()}
                                 style={{
                                   padding: '4px 10px',
-                                  background: 'rgba(56, 189, 248, 0.15)',
+                                  background: 'var(--color-primary-bg)',
                                   border: '1px solid rgba(56, 189, 248, 0.3)',
-                                  color: '#38bdf8',
+                                  color: 'var(--color-primary)',
                                   borderRadius: '5px',
                                   fontSize: '11px',
                                   fontWeight: 600,
@@ -1290,9 +1543,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                 title="Thêm header Content-Type: application/json"
                                 style={{
                                   padding: '4px 8px',
-                                  background: '#131e36',
-                                  border: '1px solid #233554',
-                                  color: '#94a3b8',
+                                  background: 'var(--bg-surface-secondary)',
+                                  border: '1px solid var(--border-subtle)',
+                                  color: 'var(--text-muted)',
                                   borderRadius: '5px',
                                   fontSize: '11px',
                                   cursor: 'pointer'
@@ -1307,9 +1560,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                 title="Thêm header apikey cho Supabase"
                                 style={{
                                   padding: '4px 8px',
-                                  background: '#131e36',
-                                  border: '1px solid #233554',
-                                  color: '#34d399',
+                                  background: 'var(--bg-surface-secondary)',
+                                  border: '1px solid var(--border-subtle)',
+                                  color: '#10b981',
                                   borderRadius: '5px',
                                   fontSize: '11px',
                                   cursor: 'pointer'
@@ -1324,9 +1577,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                 title="Thêm header Authorization: Bearer token"
                                 style={{
                                   padding: '4px 8px',
-                                  background: '#131e36',
-                                  border: '1px solid #233554',
-                                  color: '#fbbf24',
+                                  background: 'var(--bg-surface-secondary)',
+                                  border: '1px solid var(--border-subtle)',
+                                  color: '#f59e0b',
                                   borderRadius: '5px',
                                   fontSize: '11px',
                                   cursor: 'pointer'
@@ -1340,8 +1593,8 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                           {/* Toggle View Mode */}
                           <div style={{
                             display: 'flex',
-                            background: '#070b14',
-                            border: '1px solid #1e293b',
+                            background: 'var(--bg-surface-secondary)',
+                            border: '1px solid var(--border-subtle)',
                             borderRadius: '5px',
                             padding: '2px',
                             marginLeft: '4px'
@@ -1353,11 +1606,12 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                 padding: '3px 8px',
                                 fontSize: '10px',
                                 fontWeight: 600,
-                                background: headersEditorMode === 'table' ? '#1e293b' : 'transparent',
-                                color: headersEditorMode === 'table' ? '#38bdf8' : '#64748b',
+                                background: headersEditorMode === 'table' ? 'var(--bg-card)' : 'transparent',
+                                color: headersEditorMode === 'table' ? 'var(--color-primary)' : 'var(--text-muted)',
                                 border: 'none',
                                 borderRadius: '4px',
-                                cursor: 'pointer'
+                                cursor: 'pointer',
+                                boxShadow: headersEditorMode === 'table' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
                               }}
                             >
                               Bảng
@@ -1369,11 +1623,12 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                 padding: '3px 8px',
                                 fontSize: '10px',
                                 fontWeight: 600,
-                                background: headersEditorMode === 'raw' ? '#1e293b' : 'transparent',
-                                color: headersEditorMode === 'raw' ? '#38bdf8' : '#64748b',
+                                background: headersEditorMode === 'raw' ? 'var(--bg-card)' : 'transparent',
+                                color: headersEditorMode === 'raw' ? 'var(--color-primary)' : 'var(--text-muted)',
                                 border: 'none',
                                 borderRadius: '4px',
-                                cursor: 'pointer'
+                                cursor: 'pointer',
+                                boxShadow: headersEditorMode === 'raw' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
                               }}
                             >
                               JSON
@@ -1397,10 +1652,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
 
                       {/* TABLE VIEW */}
                       {headersEditorMode === 'table' ? (
-                        <div style={{ border: '1px solid #1e293b', borderRadius: '6px', overflow: 'hidden', background: '#070b14' }}>
+                        <div style={{ border: '1px solid var(--border-card)', borderRadius: '6px', overflow: 'hidden', background: 'var(--bg-card)' }}>
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                             <thead>
-                              <tr style={{ background: '#0b1329', borderBottom: '1px solid #1e293b', color: '#94a3b8', textAlign: 'left' }}>
+                              <tr style={{ background: 'var(--bg-surface-secondary)', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', textAlign: 'left' }}>
                                 <th style={{ width: '40px', padding: '6px', textAlign: 'center' }}>Bật</th>
                                 <th style={{ width: '38%', padding: '6px 10px' }}>Tên Header (Key)</th>
                                 <th style={{ padding: '6px 10px' }}>Giá trị (Value / {'{{biến}}'})</th>
@@ -1409,13 +1664,13 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                             </thead>
                             <tbody>
                               {currentStepHeaders.map((row) => (
-                                <tr key={row.id} style={{ borderBottom: '1px solid rgba(30, 41, 59, 0.6)' }}>
+                                <tr key={row.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                                   <td style={{ padding: '6px', textAlign: 'center' }}>
                                     <input
                                       type="checkbox"
                                       checked={row.enabled}
                                       onChange={(e) => handleUpdateHeaderRow(row.id, 'enabled', e.target.checked)}
-                                      style={{ cursor: 'pointer', accentColor: '#38bdf8' }}
+                                      style={{ cursor: 'pointer', accentColor: 'var(--color-primary)' }}
                                     />
                                   </td>
                                   <td style={{ padding: '4px 8px' }}>
@@ -1428,10 +1683,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                       style={{
                                         width: '100%',
                                         padding: '5px 8px',
-                                        background: '#0d1527',
-                                        border: '1px solid #1e293b',
+                                        background: 'var(--bg-input)',
+                                        border: '1px solid var(--border-card)',
                                         borderRadius: '4px',
-                                        color: '#f8fafc',
+                                        color: 'var(--text-main)',
                                         fontSize: '12px',
                                         fontFamily: 'monospace',
                                         boxSizing: 'border-box'
@@ -1447,10 +1702,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                       style={{
                                         width: '100%',
                                         padding: '5px 8px',
-                                        background: '#0d1527',
-                                        border: '1px solid #1e293b',
+                                        background: 'var(--bg-input)',
+                                        border: '1px solid var(--border-card)',
                                         borderRadius: '4px',
-                                        color: '#38bdf8',
+                                        color: 'var(--color-primary)',
                                         fontSize: '12px',
                                         fontFamily: 'monospace',
                                         boxSizing: 'border-box'
@@ -1479,7 +1734,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               ))}
                               {currentStepHeaders.length === 0 && (
                                 <tr>
-                                  <td colSpan={4} style={{ padding: '16px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
+                                  <td colSpan={4} style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
                                     <div>Chưa có Header nào. Nhấn <strong>"+ Thêm Header"</strong> hoặc chọn nhanh các preset phía trên.</div>
                                   </td>
                                 </tr>
@@ -1499,9 +1754,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               width: '100%',
                               fontSize: '12px',
                               padding: '8px 10px',
-                              background: '#070b14',
-                              color: '#f8fafc',
-                              border: '1px solid #1e293b',
+                              background: 'var(--bg-input)',
+                              color: 'var(--text-main)',
+                              border: '1px solid var(--border-card)',
                               borderRadius: '6px',
                               fontFamily: 'monospace',
                               boxSizing: 'border-box'
@@ -1512,63 +1767,204 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                     </div>
 
                     {/* Request Body */}
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 700, color: '#94a3b8' }}>
-                          Request Body (Hỗ trợ biến dạng <code>{'{{variable_name}}'}</code>):
-                        </span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          {currentStep.bodyType === 'json' && (
-                            <button
-                              type="button"
-                              onClick={handleFormatRequestBody}
-                              style={{
-                                padding: '2px 8px',
-                                fontSize: '11px',
-                                fontWeight: 600,
-                                background: 'rgba(56, 189, 248, 0.15)',
-                                color: '#38bdf8',
-                                border: '1px solid rgba(56, 189, 248, 0.3)',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
+                    {(() => {
+                      const effectiveBodyType = (currentStep.bodyType === 'none' && currentStep.body && currentStep.body.trim().length > 0)
+                        ? 'json'
+                        : (currentStep.bodyType || 'none');
+
+                      return (
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>📝</span> Request Body
+                              </span>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                (Hỗ trợ biến dạng <code>{'{{variable_name}}'}</code>)
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              {effectiveBodyType === 'json' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={handleFormatRequestBody}
+                                    style={{
+                                      padding: '4px 9px',
+                                      fontSize: '11px',
+                                      fontWeight: 600,
+                                      background: 'var(--color-primary-bg)',
+                                      color: 'var(--color-primary)',
+                                      border: '1px solid rgba(56, 189, 248, 0.3)',
+                                      borderRadius: '5px',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '4px'
+                                    }}
+                                    title="Tự động căn chỉnh format JSON đẹp mắt"
+                                  >
+                                    <span>✨</span> Làm đẹp JSON
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (currentStep.body) {
+                                        navigator.clipboard.writeText(currentStep.body);
+                                        showToast('✓ Đã sao chép Request Body vào clipboard!');
+                                      }
+                                    }}
+                                    style={{
+                                      padding: '4px 9px',
+                                      fontSize: '11px',
+                                      fontWeight: 600,
+                                      background: 'var(--bg-surface-secondary)',
+                                      color: 'var(--text-muted)',
+                                      border: '1px solid var(--border-subtle)',
+                                      borderRadius: '5px',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '4px'
+                                    }}
+                                    title="Sao chép nội dung body"
+                                  >
+                                    <span>📋</span> Sao chép
+                                  </button>
+                                </>
+                              )}
+
+                              {/* Segmented body type selector */}
+                              <div style={{
                                 display: 'flex',
-                                alignItems: 'center',
-                                gap: '3px'
+                                background: 'var(--bg-surface-secondary)',
+                                border: '1px solid var(--border-subtle)',
+                                borderRadius: '5px',
+                                padding: '2px'
+                              }}>
+                                <button
+                                  type="button"
+                                  onClick={() => updateCurrentStep({ bodyType: 'none' })}
+                                  style={{
+                                    padding: '3px 10px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    background: effectiveBodyType === 'none' ? 'var(--bg-card)' : 'transparent',
+                                    color: effectiveBodyType === 'none' ? 'var(--color-primary)' : 'var(--text-muted)',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    boxShadow: effectiveBodyType === 'none' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                                  }}
+                                >
+                                  None
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => updateCurrentStep({ bodyType: 'json' })}
+                                  style={{
+                                    padding: '3px 10px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    background: effectiveBodyType === 'json' ? 'var(--bg-card)' : 'transparent',
+                                    color: effectiveBodyType === 'json' ? 'var(--color-primary)' : 'var(--text-muted)',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    boxShadow: effectiveBodyType === 'json' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                                  }}
+                                >
+                                  JSON
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => updateCurrentStep({ bodyType: 'raw' })}
+                                  style={{
+                                    padding: '3px 10px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    background: effectiveBodyType === 'raw' ? 'var(--bg-card)' : 'transparent',
+                                    color: effectiveBodyType === 'raw' ? 'var(--color-primary)' : 'var(--text-muted)',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    boxShadow: effectiveBodyType === 'raw' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                                  }}
+                                >
+                                  Raw / Text
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {effectiveBodyType === 'none' ? (
+                            <div style={{
+                              flex: 1,
+                              minHeight: '160px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: 'var(--bg-card)',
+                              border: '1px dashed var(--border-card)',
+                              borderRadius: '8px',
+                              padding: '24px',
+                              textAlign: 'center',
+                              gap: '8px'
+                            }}>
+                              <span style={{ fontSize: '26px' }}>🚫</span>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-main)' }}>
+                                Không gửi Payload (Request Body: None)
+                              </span>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)', maxWidth: '380px', lineHeight: '1.5' }}>
+                                Request này sẽ được gửi mà không đính kèm body data. Nếu endpoint yêu cầu dữ liệu, nhấn nút bên dưới để bắt đầu soạn JSON.
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => updateCurrentStep({ bodyType: 'json' })}
+                                style={{
+                                  marginTop: '6px',
+                                  padding: '6px 14px',
+                                  background: 'var(--color-primary-bg)',
+                                  color: 'var(--color-primary)',
+                                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                + Bật soạn JSON Payload
+                              </button>
+                            </div>
+                          ) : (
+                            <textarea
+                              rows={10}
+                              value={currentStep.body}
+                              onChange={e => {
+                                const val = e.target.value;
+                                updateCurrentStep({ body: val, bodyType: effectiveBodyType });
                               }}
-                              title="Làm đẹp (Format JSON)"
-                            >
-                              <span>✨</span> Làm đẹp JSON
-                            </button>
+                              placeholder={effectiveBodyType === 'json' ? "{\n  \"title\": \"{{productName}}\",\n  \"userId\": \"{{userId}}\"\n}" : "Nhập nội dung văn bản thô..."}
+                              style={{
+                                flex: 1,
+                                minHeight: '180px',
+                                fontSize: '12px',
+                                padding: '12px',
+                                background: 'var(--bg-input)',
+                                color: 'var(--text-main)',
+                                border: '1px solid var(--border-card)',
+                                borderRadius: '6px',
+                                fontFamily: 'monospace',
+                                boxSizing: 'border-box',
+                                lineHeight: '1.5'
+                              }}
+                            />
                           )}
-                          <select
-                            value={currentStep.bodyType}
-                            onChange={e => updateCurrentStep({ bodyType: e.target.value })}
-                            style={{ padding: '2px 8px', fontSize: '11px', background: '#111827', color: '#fff', border: '1px solid #334155', borderRadius: '4px' }}
-                          >
-                            <option value="json">JSON</option>
-                            <option value="raw">Raw / Text</option>
-                            <option value="none">None</option>
-                          </select>
                         </div>
-                      </div>
-                      <textarea
-                        rows={9}
-                        value={currentStep.body}
-                        onChange={e => updateCurrentStep({ body: e.target.value })}
-                        placeholder="{\n  &quot;title&quot;: &quot;{{productName}}&quot;,\n  &quot;userId&quot;: &quot;{{userId}}&quot;\n}"
-                        style={{
-                          flex: 1,
-                          fontSize: '12px',
-                          padding: '10px',
-                          background: '#0a0f1d',
-                          color: '#38bdf8',
-                          border: '1px solid #334155',
-                          borderRadius: '6px',
-                          fontFamily: 'monospace',
-                          boxSizing: 'border-box'
-                        }}
-                      />
-                    </div>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -1576,7 +1972,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                 {selectedSubTab === 'assertions' && (
                   <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                         Thiết lập các điều kiện kiểm tra (Status, Latency, JSONPath so sánh):
                       </span>
                       <button
@@ -1585,8 +1981,8 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                           updateCurrentStep({ assertions: [...(currentStep.assertions || []), newRule] });
                         }}
                         style={{
-                          background: 'rgba(56, 189, 248, 0.15)',
-                          color: '#38bdf8',
+                          background: 'var(--color-primary-bg)',
+                          color: 'var(--color-primary)',
                           border: '1px solid rgba(56, 189, 248, 0.3)',
                           padding: '4px 10px',
                           borderRadius: '4px',
@@ -1608,7 +2004,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                             updateCurrentStep({ assertions: [{ type: 'status', operator: 'eq', expected: '200' }, ...currentStep.assertions] });
                           }
                         }}
-                        style={{ fontSize: '11px', padding: '3px 8px', background: '#1e293b', border: '1px solid #334155', color: '#38bdf8', borderRadius: '4px', cursor: 'pointer' }}
+                        style={{ fontSize: '11px', padding: '3px 8px', background: 'var(--bg-surface-secondary)', border: '1px solid var(--border-subtle)', color: 'var(--color-primary)', borderRadius: '4px', cursor: 'pointer' }}
                       >
                         + Status 200
                       </button>
@@ -1617,7 +2013,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                           const newRule: AssertionRule = { type: 'time', operator: 'lt', expected: '2000' };
                           updateCurrentStep({ assertions: [...currentStep.assertions, newRule] });
                         }}
-                        style={{ fontSize: '11px', padding: '3px 8px', background: '#1e293b', border: '1px solid #334155', color: '#10b981', borderRadius: '4px', cursor: 'pointer' }}
+                        style={{ fontSize: '11px', padding: '3px 8px', background: 'var(--bg-surface-secondary)', border: '1px solid var(--border-subtle)', color: '#10b981', borderRadius: '4px', cursor: 'pointer' }}
                       >
                         + Thời gian &lt; 2000ms
                       </button>
@@ -1626,7 +2022,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                           const newRule: AssertionRule = { type: 'body_json', target: '$.id', operator: 'exists', expected: '' };
                           updateCurrentStep({ assertions: [...currentStep.assertions, newRule] });
                         }}
-                        style={{ fontSize: '11px', padding: '3px 8px', background: '#1e293b', border: '1px solid #334155', color: '#f59e0b', borderRadius: '4px', cursor: 'pointer' }}
+                        style={{ fontSize: '11px', padding: '3px 8px', background: 'var(--bg-surface-secondary)', border: '1px solid var(--border-subtle)', color: '#f59e0b', borderRadius: '4px', cursor: 'pointer' }}
                       >
                         + Kiểm tra có trường $.id
                       </button>
@@ -1642,10 +2038,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                             gridTemplateColumns: '140px 180px 130px 1fr 30px',
                             gap: '8px',
                             alignItems: 'center',
-                            background: '#0a0f1d',
+                            background: 'var(--bg-card)',
                             padding: '8px 12px',
                             borderRadius: '6px',
-                            border: '1px solid #1e293b'
+                            border: '1px solid var(--border-card)'
                           }}
                         >
                           {/* Type */}
@@ -1656,7 +2052,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               updated[rIdx] = { ...rule, type: e.target.value as any };
                               updateCurrentStep({ assertions: updated });
                             }}
-                            style={{ padding: '5px', fontSize: '11px', background: '#111827', color: '#f8fafc', border: '1px solid #334155', borderRadius: '4px' }}
+                            style={{ padding: '5px', fontSize: '11px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-card)', borderRadius: '4px' }}
                           >
                             <option value="status">Mã Status</option>
                             <option value="time">Thời gian phản hồi</option>
@@ -1678,9 +2074,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                             style={{
                               padding: '5px 8px',
                               fontSize: '11px',
-                              background: rule.type === 'status' || rule.type === 'time' ? '#1e293b' : '#111827',
-                              color: '#f8fafc',
-                              border: '1px solid #334155',
+                              background: rule.type === 'status' || rule.type === 'time' ? 'var(--bg-surface-secondary)' : 'var(--bg-input)',
+                              color: 'var(--text-main)',
+                              border: '1px solid var(--border-card)',
                               borderRadius: '4px',
                               fontFamily: 'monospace'
                             }}
@@ -1694,7 +2090,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               updated[rIdx] = { ...rule, operator: e.target.value as any };
                               updateCurrentStep({ assertions: updated });
                             }}
-                            style={{ padding: '5px', fontSize: '11px', background: '#111827', color: '#f8fafc', border: '1px solid #334155', borderRadius: '4px' }}
+                            style={{ padding: '5px', fontSize: '11px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-card)', borderRadius: '4px' }}
                           >
                             <option value="eq">Bằng (==)</option>
                             <option value="neq">Khác (!=)</option>
@@ -1722,9 +2118,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                             style={{
                               padding: '5px 8px',
                               fontSize: '11px',
-                              background: rule.operator === 'exists' || rule.operator === 'not_exists' ? '#1e293b' : '#111827',
-                              color: '#f8fafc',
-                              border: '1px solid #334155',
+                              background: rule.operator === 'exists' || rule.operator === 'not_exists' ? 'var(--bg-surface-secondary)' : 'var(--bg-input)',
+                              color: 'var(--text-main)',
+                              border: '1px solid var(--border-card)',
                               borderRadius: '4px'
                             }}
                           />
@@ -1749,7 +2145,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                 {selectedSubTab === 'extract' && (
                   <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                         Trích xuất dữ liệu từ Response để dùng ở các bước sau qua cú pháp <code>{'{{variable_name}}'}</code>:
                       </span>
                       <button
@@ -1758,8 +2154,8 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                           updateCurrentStep({ extractVars: [...(currentStep.extractVars || []), newVar] });
                         }}
                         style={{
-                          background: 'rgba(56, 189, 248, 0.15)',
-                          color: '#38bdf8',
+                          background: 'var(--color-primary-bg)',
+                          color: 'var(--color-primary)',
                           border: '1px solid rgba(56, 189, 248, 0.3)',
                           padding: '4px 10px',
                           borderRadius: '4px',
@@ -1781,10 +2177,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                             gridTemplateColumns: '180px 140px 1fr 30px',
                             gap: '8px',
                             alignItems: 'center',
-                            background: '#0a0f1d',
+                            background: 'var(--bg-card)',
                             padding: '8px 12px',
                             borderRadius: '6px',
-                            border: '1px solid #1e293b'
+                            border: '1px solid var(--border-card)'
                           }}
                         >
                           <input
@@ -1796,7 +2192,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               updateCurrentStep({ extractVars: updated });
                             }}
                             placeholder="Tên biến (e.g. authToken)..."
-                            style={{ padding: '5px 8px', fontSize: '11px', background: '#111827', color: '#38bdf8', border: '1px solid #334155', borderRadius: '4px', fontWeight: 700 }}
+                            style={{ padding: '5px 8px', fontSize: '11px', background: 'var(--bg-input)', color: 'var(--color-primary)', border: '1px solid var(--border-card)', borderRadius: '4px', fontWeight: 700 }}
                           />
 
                           <select
@@ -1806,7 +2202,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               updated[eIdx] = { ...ext, source: e.target.value as any };
                               updateCurrentStep({ extractVars: updated });
                             }}
-                            style={{ padding: '5px', fontSize: '11px', background: '#111827', color: '#f8fafc', border: '1px solid #334155', borderRadius: '4px' }}
+                            style={{ padding: '5px', fontSize: '11px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-card)', borderRadius: '4px' }}
                           >
                             <option value="body_json">Body JSONPath</option>
                             <option value="header">Header</option>
@@ -1821,7 +2217,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               updateCurrentStep({ extractVars: updated });
                             }}
                             placeholder="Đường dẫn trích xuất (e.g. $.data.token hoặc Authorization)..."
-                            style={{ padding: '5px 8px', fontSize: '11px', background: '#111827', color: '#f8fafc', border: '1px solid #334155', borderRadius: '4px', fontFamily: 'monospace' }}
+                            style={{ padding: '5px 8px', fontSize: '11px', background: 'var(--bg-input)', color: 'var(--text-main)', border: '1px solid var(--border-card)', borderRadius: '4px', fontFamily: 'monospace' }}
                           />
 
                           <button
@@ -1840,7 +2236,7 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                 )}
               </div>
             ) : (
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
                 Chọn một bước bên trái hoặc thêm bước mới để thiết lập kịch bản.
               </div>
             )}
@@ -1850,87 +2246,170 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
         {/* TAB 2: LIVE RUNNER & RESULTS */}
         {activeTab === 'runner' && currentScenario && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            {/* Top Metrics Banner */}
+            {/* Top Metrics KPI Cards Banner */}
             <div style={{
-              padding: '14px 20px',
-              background: '#090f1e',
-              borderBottom: '1px solid #1e293b',
+              padding: '12px 18px',
+              background: 'var(--bg-surface-secondary)',
+              borderBottom: '1px solid var(--border-subtle)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
+              gap: '12px',
+              flexWrap: 'wrap',
               flexShrink: 0
             }}>
-              <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+              {/* Metric Cards */}
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                 {/* Metric 1: Total Steps */}
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700 }}>Tổng số bước</span>
-                  <span style={{ fontSize: '18px', fontWeight: 800, color: '#f8fafc' }}>
-                    {stepResults.length} / {currentScenario.steps.length}
-                  </span>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border-card)',
+                  borderRadius: '8px',
+                  padding: '8px 14px'
+                }}>
+                  <span style={{ fontSize: '18px' }}>📋</span>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Tổng bước</span>
+                    <span style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                      {stepResults.length} / {currentScenario.steps.length}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Metric 2: Passed */}
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: '10px', color: '#10b981', textTransform: 'uppercase', fontWeight: 700 }}>Thành công</span>
-                  <span style={{ fontSize: '18px', fontWeight: 800, color: '#10b981' }}>
-                    {stepResults.filter(r => r.passed).length}
-                  </span>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: 'rgba(16, 185, 129, 0.1)',
+                  border: '1px solid rgba(16, 185, 129, 0.25)',
+                  borderRadius: '8px',
+                  padding: '8px 14px'
+                }}>
+                  <span style={{ fontSize: '18px' }}>✅</span>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: '10px', color: '#10b981', textTransform: 'uppercase', fontWeight: 700 }}>Thành công</span>
+                    <span style={{ fontSize: '16px', fontWeight: 800, color: '#10b981' }}>
+                      {stepResults.filter(r => r.passed).length}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Metric 3: Failed */}
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: '10px', color: '#ef4444', textTransform: 'uppercase', fontWeight: 700 }}>Thất bại</span>
-                  <span style={{ fontSize: '18px', fontWeight: 800, color: '#ef4444' }}>
-                    {stepResults.filter(r => !r.passed).length}
-                  </span>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                  borderRadius: '8px',
+                  padding: '8px 14px'
+                }}>
+                  <span style={{ fontSize: '18px' }}>❌</span>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: '10px', color: '#ef4444', textTransform: 'uppercase', fontWeight: 700 }}>Thất bại</span>
+                    <span style={{ fontSize: '16px', fontWeight: 800, color: '#ef4444' }}>
+                      {stepResults.filter(r => !r.passed).length}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Metric 4: Success Rate */}
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: '10px', color: '#38bdf8', textTransform: 'uppercase', fontWeight: 700 }}>Tỷ lệ đạt</span>
-                  <span style={{ fontSize: '18px', fontWeight: 800, color: '#38bdf8' }}>
-                    {stepResults.length > 0 ? Math.round((stepResults.filter(r => r.passed).length / stepResults.length) * 100) : 0}%
-                  </span>
-                </div>
-
-                {/* Metric 5: Total Time */}
-                {runSummary && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: 'rgba(56, 189, 248, 0.1)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  borderRadius: '8px',
+                  padding: '8px 14px'
+                }}>
+                  <span style={{ fontSize: '18px' }}>🎯</span>
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <span style={{ fontSize: '10px', color: '#a855f7', textTransform: 'uppercase', fontWeight: 700 }}>Tổng thời gian</span>
-                    <span style={{ fontSize: '18px', fontWeight: 800, color: '#a855f7' }}>
-                      {runSummary.totalDurationMs} ms
+                    <span style={{ fontSize: '10px', color: 'var(--color-primary)', textTransform: 'uppercase', fontWeight: 700 }}>Tỷ lệ đạt</span>
+                    <span style={{ fontSize: '16px', fontWeight: 800, color: 'var(--color-primary)' }}>
+                      {stepResults.length > 0 ? Math.round((stepResults.filter(r => r.passed).length / stepResults.length) * 100) : 0}%
                     </span>
                   </div>
-                )}
+                </div>
+
+                {/* Metric 5: Duration */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  background: 'rgba(168, 85, 247, 0.1)',
+                  border: '1px solid rgba(168, 85, 247, 0.25)',
+                  borderRadius: '8px',
+                  padding: '8px 14px'
+                }}>
+                  <span style={{ fontSize: '18px' }}>⏱️</span>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: '10px', color: '#a855f7', textTransform: 'uppercase', fontWeight: 700 }}>Thời gian</span>
+                    <span style={{ fontSize: '16px', fontWeight: 800, color: '#a855f7' }}>
+                      {runSummary?.totalDurationMs ? `${runSummary.totalDurationMs} ms` : '---'}
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              {/* Action buttons on results */}
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={handleStartRun}
-                  disabled={isRunning}
-                  style={{
-                    background: 'rgba(56, 189, 248, 0.15)',
-                    color: '#38bdf8',
-                    border: '1px solid rgba(56, 189, 248, 0.3)',
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    cursor: isRunning ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  🔄 Chạy lại
-                </button>
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {!isRunning ? (
+                  <button
+                    onClick={handleStartRun}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)',
+                      color: '#ffffff',
+                      border: 'none',
+                      padding: '7px 18px',
+                      borderRadius: '6px',
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      boxShadow: '0 0 15px rgba(14, 165, 233, 0.35)'
+                    }}
+                  >
+                    ▶ Chạy Kịch Bản
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleCancelRun}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: '#ef4444',
+                      color: '#ffffff',
+                      border: 'none',
+                      padding: '7px 18px',
+                      borderRadius: '6px',
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    ⏹ Dừng Chạy
+                  </button>
+                )}
 
                 <button
                   onClick={() => exportTestReportToExcel(currentScenario.name, stepResults, runSummary)}
                   disabled={stepResults.length === 0}
                   style={{
-                    background: 'rgba(16, 185, 129, 0.15)',
-                    color: '#10b981',
-                    border: '1px solid rgba(16, 185, 129, 0.35)',
-                    padding: '6px 12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: stepResults.length === 0 ? 'var(--bg-surface-secondary)' : 'rgba(16, 185, 129, 0.15)',
+                    color: stepResults.length === 0 ? 'var(--text-muted)' : '#10b981',
+                    border: stepResults.length === 0 ? '1px solid var(--border-subtle)' : '1px solid rgba(16, 185, 129, 0.35)',
+                    padding: '7px 14px',
                     borderRadius: '6px',
                     fontSize: '12px',
                     fontWeight: 700,
@@ -1945,141 +2424,224 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
             {/* Split view: Steps List vs Step Inspector */}
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
               {/* Left: Step Execution List */}
-              <div style={{ width: '400px', borderRight: '1px solid #1e293b', background: '#0a0f1d', overflowY: 'auto', padding: '10px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {currentScenario.steps.map((st, idx) => {
-                    const result = stepResults[idx];
-                    const isCurrent = isRunning && currentRunningIndex === idx;
-                    const isSelected = inspectedStepResult?.stepId === st.id;
+              <div style={{
+                width: '360px',
+                borderRight: '1px solid var(--border-subtle)',
+                background: 'var(--bg-sidebar)',
+                overflowY: 'auto',
+                padding: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px', letterSpacing: '0.5px' }}>
+                  Tiến trình thực thi ({stepResults.length}/{currentScenario.steps.length})
+                </div>
 
-                    let statusBadge = '⏳ Chờ';
-                    let badgeBg = 'rgba(148, 163, 184, 0.15)';
-                    let badgeColor = '#94a3b8';
+                {currentScenario.steps.map((st, idx) => {
+                  const result = stepResults[idx];
+                  const isCurrent = isRunning && currentRunningIndex === idx;
+                  const isSelected = inspectedStepResult?.stepId === st.id;
 
-                    if (isCurrent) {
-                      statusBadge = '🔄 Đang chạy...';
-                      badgeBg = 'rgba(56, 189, 248, 0.2)';
-                      badgeColor = '#38bdf8';
-                    } else if (result) {
-                      if (result.passed) {
-                        statusBadge = 'PASSED ✅';
-                        badgeBg = 'rgba(16, 185, 129, 0.2)';
-                        badgeColor = '#10b981';
-                      } else {
-                        statusBadge = 'FAILED ❌';
-                        badgeBg = 'rgba(239, 68, 68, 0.2)';
-                        badgeColor = '#ef4444';
-                      }
+                  let statusBadge = '⏳ Chờ thực thi';
+                  let badgeBg = 'var(--bg-badge)';
+                  let badgeColor = 'var(--text-muted)';
+                  let badgeBorder = '1px solid var(--border-subtle)';
+
+                  if (isCurrent) {
+                    statusBadge = '🔄 Đang chạy...';
+                    badgeBg = 'var(--color-primary-bg)';
+                    badgeColor = 'var(--color-primary)';
+                    badgeBorder = '1px solid rgba(56, 189, 248, 0.4)';
+                  } else if (result) {
+                    if (result.passed) {
+                      statusBadge = `✅ PASSED (${result.status})`;
+                      badgeBg = 'rgba(16, 185, 129, 0.15)';
+                      badgeColor = '#10b981';
+                      badgeBorder = '1px solid rgba(16, 185, 129, 0.35)';
+                    } else {
+                      statusBadge = `❌ FAILED (${result.status || 'ERR'})`;
+                      badgeBg = 'rgba(239, 68, 68, 0.15)';
+                      badgeColor = '#ef4444';
+                      badgeBorder = '1px solid rgba(239, 68, 68, 0.35)';
                     }
+                  }
 
-                    return (
-                      <div
-                        key={st.id}
-                        onClick={() => result && setInspectedStepResult(result)}
-                        style={{
-                          padding: '10px',
-                          borderRadius: '8px',
-                          background: isSelected ? '#1e293b' : '#111827',
-                          border: isSelected ? '1px solid #38bdf8' : '1px solid #1f293d',
-                          cursor: result ? 'pointer' : 'default',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '6px'
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: '13px', fontWeight: 700, color: '#f8fafc' }}>
+                  const methodStyle = getMethodBadgeStyle(st.method);
+
+                  return (
+                    <div
+                      key={st.id}
+                      onClick={() => result && setInspectedStepResult(result)}
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        background: isSelected ? 'var(--bg-active)' : 'var(--bg-card)',
+                        border: isSelected ? '1px solid var(--color-primary)' : isCurrent ? '1px solid var(--color-primary)' : '1px solid var(--border-card)',
+                        cursor: result ? 'pointer' : 'default',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>#{idx + 1}</span>
+                          <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {st.name}
                           </span>
-                          <span style={{
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 8px',
-                            borderRadius: '10px',
-                            background: badgeBg,
-                            color: badgeColor
-                          }}>
-                            {statusBadge}
-                          </span>
                         </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#94a3b8' }}>
-                          <span style={{ fontFamily: 'monospace' }}>
-                            <strong style={{ color: '#38bdf8' }}>{st.method}</strong> {st.apiPath}
-                          </span>
-                          {result && (
-                            <span style={{ fontFamily: 'monospace', color: result.passed ? '#10b981' : '#ef4444', fontWeight: 700 }}>
-                              HTTP {result.status} ({result.durationMs}ms)
-                            </span>
-                          )}
-                        </div>
+                        <span style={{
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '10px',
+                          background: badgeBg,
+                          color: badgeColor,
+                          border: badgeBorder,
+                          flexShrink: 0
+                        }}>
+                          {statusBadge}
+                        </span>
                       </div>
-                    );
-                  })}
-                </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>
+                        <span style={{ fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <strong style={{
+                            padding: '1px 5px',
+                            borderRadius: '3px',
+                            fontSize: '9px',
+                            ...methodStyle
+                          }}>
+                            {st.method}
+                          </strong>
+                          <span style={{ color: 'var(--text-main)' }}>{st.apiPath}</span>
+                        </span>
+                        {result && (
+                          <span style={{ fontFamily: 'monospace', color: 'var(--text-muted)', fontSize: '10.5px' }}>
+                            {result.durationMs}ms
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Right: Step Inspector */}
-              <div style={{ flex: 1, overflowY: 'auto', padding: '16px', background: '#0d1527', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* Right: Step Inspector or Empty State */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '16px', background: 'var(--bg-app)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 {inspectedStepResult ? (
                   <>
                     {/* Header info */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1e293b', paddingBottom: '10px' }}>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      borderBottom: '1px solid var(--border-subtle)',
+                      paddingBottom: '12px'
+                    }}>
                       <div>
-                        <h3 style={{ margin: 0, fontSize: '15px', color: '#f8fafc', fontWeight: 800 }}>
-                          {inspectedStepResult.stepName}
-                        </h3>
-                        <div style={{ fontSize: '12px', color: '#38bdf8', fontFamily: 'monospace', marginTop: '3px' }}>
-                          {inspectedStepResult.method} {inspectedStepResult.url}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{
+                            padding: '2px 7px',
+                            borderRadius: '4px',
+                            fontSize: '10px',
+                            fontWeight: 800,
+                            fontFamily: 'monospace',
+                            ...getMethodBadgeStyle(inspectedStepResult.method)
+                          }}>
+                            {inspectedStepResult.method}
+                          </span>
+                          <h3 style={{ margin: 0, fontSize: '15px', color: 'var(--text-main)', fontWeight: 800 }}>
+                            {inspectedStepResult.stepName}
+                          </h3>
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--color-primary)', fontFamily: 'monospace', marginTop: '4px' }}>
+                          {inspectedStepResult.url}
                         </div>
                       </div>
-                      <div style={{ display: 'flex', gap: '8px' }}>
+
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <span style={{
                           fontSize: '12px',
                           fontWeight: 800,
                           padding: '4px 10px',
                           borderRadius: '6px',
                           background: inspectedStepResult.passed ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
-                          color: inspectedStepResult.passed ? '#10b981' : '#ef4444'
+                          color: inspectedStepResult.passed ? '#10b981' : '#ef4444',
+                          border: inspectedStepResult.passed ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)'
                         }}>
-                          Status: {inspectedStepResult.status} {inspectedStepResult.statusText} ({inspectedStepResult.durationMs}ms)
+                          HTTP {inspectedStepResult.status} {inspectedStepResult.statusText || ''}
+                        </span>
+                        <span style={{
+                          fontSize: '11px',
+                          color: 'var(--text-main)',
+                          background: 'var(--bg-surface-secondary)',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--border-card)',
+                          fontFamily: 'monospace'
+                        }}>
+                          ⏱️ {inspectedStepResult.durationMs}ms
                         </span>
                       </div>
                     </div>
 
+                    {/* Error trace if failed */}
+                    {inspectedStepResult.error && (
+                      <div style={{
+                        background: 'rgba(239, 68, 68, 0.1)',
+                        border: '1px solid rgba(239, 68, 68, 0.35)',
+                        borderRadius: '8px',
+                        padding: '12px'
+                      }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#f87171', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                          <span>⚠️</span> Lỗi thực thi:
+                        </div>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#fca5a5', fontSize: '11.5px', fontFamily: 'monospace' }}>
+                          {inspectedStepResult.error}
+                        </pre>
+                      </div>
+                    )}
+
                     {/* Assertion Breakdown */}
-                    <div style={{ background: '#090e1a', padding: '12px', borderRadius: '8px', border: '1px solid #1e293b' }}>
-                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#94a3b8', marginBottom: '8px' }}>
-                        🎯 Chi tiết Kiểm định (Assertions):
+                    <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-card)' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span>🎯</span> Chi tiết Kiểm định (Assertions):
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {inspectedStepResult.assertionDetails.map((ad, idx) => (
-                          <div
-                            key={idx}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              fontSize: '12px',
-                              padding: '6px 10px',
-                              borderRadius: '4px',
-                              background: ad.passed ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                              borderLeft: ad.passed ? '3px solid #10b981' : '3px solid #ef4444',
-                              color: ad.passed ? '#a7f3d0' : '#fca5a5'
-                            }}
-                          >
-                            <span>{ad.passed ? '✅' : '❌'}</span>
-                            <span style={{ flex: 1 }}>{ad.message}</span>
-                          </div>
-                        ))}
+                        {inspectedStepResult.assertionDetails && inspectedStepResult.assertionDetails.length > 0 ? (
+                          inspectedStepResult.assertionDetails.map((ad, idx) => (
+                            <div
+                              key={idx}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                fontSize: '12px',
+                                padding: '7px 10px',
+                                borderRadius: '4px',
+                                background: ad.passed ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                                borderLeft: ad.passed ? '3px solid #10b981' : '3px solid #ef4444',
+                                color: ad.passed ? '#10b981' : '#ef4444'
+                              }}
+                            >
+                              <span>{ad.passed ? '✅' : '❌'}</span>
+                              <span style={{ flex: 1 }}>{ad.message}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Không có assertion nào cho bước này.</div>
+                        )}
                       </div>
                     </div>
 
                     {/* Extracted Variables in this step */}
                     {Object.keys(inspectedStepResult.extracted || {}).length > 0 && (
-                      <div style={{ background: '#090e1a', padding: '12px', borderRadius: '8px', border: '1px solid #1e293b' }}>
-                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#38bdf8', marginBottom: '8px' }}>
-                          🔗 Biến đã trích xuất từ bước này:
+                      <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-card)' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span>🔗</span> Biến đã trích xuất từ bước này:
                         </div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                           {Object.entries(inspectedStepResult.extracted).map(([k, v]) => (
@@ -2087,10 +2649,10 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               key={k}
                               style={{
                                 fontSize: '11px',
-                                background: 'rgba(56, 189, 248, 0.15)',
-                                color: '#38bdf8',
+                                background: 'var(--color-primary-bg)',
+                                color: 'var(--color-primary)',
                                 border: '1px solid rgba(56, 189, 248, 0.3)',
-                                padding: '4px 8px',
+                                padding: '4px 10px',
                                 borderRadius: '4px',
                                 fontFamily: 'monospace'
                               }}
@@ -2103,20 +2665,20 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                     )}
 
                     {/* Response Body Inspector */}
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px', minHeight: '220px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontSize: '12px', fontWeight: 700, color: '#f1f5f9' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
                             Response Body:
                           </span>
                           {inspectedStepResult.responseBody && (
                             <span style={{
                               fontSize: '10px',
-                              color: '#94a3b8',
-                              background: 'rgba(148, 163, 184, 0.1)',
+                              color: 'var(--text-muted)',
+                              background: 'var(--bg-surface-secondary)',
                               padding: '1px 6px',
                               borderRadius: '4px',
-                              border: '1px solid rgba(148, 163, 184, 0.2)'
+                              border: '1px solid var(--border-subtle)'
                             }}>
                               {new Blob([inspectedStepResult.responseBody]).size} bytes
                             </span>
@@ -2127,8 +2689,8 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                           {/* Beautify / Raw toggle */}
                           <div style={{
                             display: 'flex',
-                            background: '#070b14',
-                            border: '1px solid #1e293b',
+                            background: 'var(--bg-surface-secondary)',
+                            border: '1px solid var(--border-subtle)',
                             borderRadius: '5px',
                             padding: '2px'
                           }}>
@@ -2139,14 +2701,15 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                 padding: '3px 8px',
                                 fontSize: '11px',
                                 fontWeight: 600,
-                                background: responseFormatMode === 'pretty' ? '#1e293b' : 'transparent',
-                                color: responseFormatMode === 'pretty' ? '#38bdf8' : '#64748b',
+                                background: responseFormatMode === 'pretty' ? 'var(--bg-card)' : 'transparent',
+                                color: responseFormatMode === 'pretty' ? 'var(--color-primary)' : 'var(--text-muted)',
                                 border: 'none',
                                 borderRadius: '4px',
                                 cursor: 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '3px'
+                                gap: '3px',
+                                boxShadow: responseFormatMode === 'pretty' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
                               }}
                             >
                               <span>✨</span> Làm đẹp
@@ -2158,11 +2721,12 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                                 padding: '3px 8px',
                                 fontSize: '11px',
                                 fontWeight: 600,
-                                background: responseFormatMode === 'raw' ? '#1e293b' : 'transparent',
-                                color: responseFormatMode === 'raw' ? '#38bdf8' : '#64748b',
+                                background: responseFormatMode === 'raw' ? 'var(--bg-card)' : 'transparent',
+                                color: responseFormatMode === 'raw' ? 'var(--color-primary)' : 'var(--text-muted)',
                                 border: 'none',
                                 borderRadius: '4px',
-                                cursor: 'pointer'
+                                cursor: 'pointer',
+                                boxShadow: responseFormatMode === 'raw' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
                               }}
                             >
                               Raw
@@ -2177,9 +2741,9 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                               padding: '3px 8px',
                               fontSize: '11px',
                               fontWeight: 600,
-                              background: copiedResponse ? 'rgba(16, 185, 129, 0.2)' : '#111827',
-                              color: copiedResponse ? '#10b981' : '#94a3b8',
-                              border: `1px solid ${copiedResponse ? 'rgba(16, 185, 129, 0.4)' : '#334155'}`,
+                              background: copiedResponse ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-surface-secondary)',
+                              color: copiedResponse ? '#10b981' : 'var(--text-muted)',
+                              border: `1px solid ${copiedResponse ? 'rgba(16, 185, 129, 0.4)' : 'var(--border-subtle)'}`,
                               borderRadius: '4px',
                               cursor: 'pointer',
                               display: 'flex',
@@ -2194,16 +2758,16 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
 
                       <pre style={{
                         flex: 1,
+                        minHeight: '200px',
                         margin: 0,
                         padding: '12px',
-                        background: '#090e1a',
-                        color: '#38bdf8',
+                        background: 'var(--bg-card)',
+                        color: 'var(--color-primary)',
                         borderRadius: '6px',
-                        border: '1px solid #1e293b',
+                        border: '1px solid var(--border-card)',
                         fontSize: '12px',
                         fontFamily: 'monospace',
                         overflowX: 'auto',
-                        maxHeight: '340px',
                         lineHeight: '1.5',
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word'
@@ -2213,8 +2777,57 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
                     </div>
                   </>
                 ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748b' }}>
-                    Nhấn "▶ Chạy Kịch Bản" để bắt đầu kiểm thử hoặc chọn một bước bên trái để xem kết quả.
+                  /* HERO EMPTY STATE - FIXING SCREENSHOT 3 */
+                  <div style={{
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '32px',
+                    textAlign: 'center'
+                  }}>
+                    <div style={{
+                      width: '76px',
+                      height: '76px',
+                      borderRadius: '50%',
+                      background: 'var(--color-primary-bg)',
+                      border: '1px solid rgba(56, 189, 248, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '34px',
+                      marginBottom: '16px',
+                      boxShadow: '0 0 35px rgba(56, 189, 248, 0.25)'
+                    }}>
+                      🚀
+                    </div>
+                    <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
+                      Sẵn Sàng Kiểm Thử Kịch Bản
+                    </h3>
+                    <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: 'var(--text-muted)', maxWidth: '440px', lineHeight: '1.6' }}>
+                      Kịch bản <strong>"{currentScenario.name}"</strong> gồm <strong>{currentScenario.steps.length} bước</strong> kiểm thử liên hoàn. Nhấn nút bên dưới để bắt đầu gửi request và kiểm tra assertions.
+                    </p>
+                    <button
+                      onClick={handleStartRun}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        background: 'linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%)',
+                        color: '#ffffff',
+                        border: 'none',
+                        padding: '10px 24px',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 20px rgba(14, 165, 233, 0.4)',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      ▶ Bắt Đầu Chạy Kịch Bản Ngay
+                    </button>
                   </div>
                 )}
               </div>
@@ -2222,26 +2835,588 @@ export default function AutomationModal({ isOpen, onClose }: AutomationModalProp
           </div>
         )}
 
+        {/* TAB 3: HISTORY */}
         {activeTab === 'history' && currentScenario && (
-          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '280px 1fr', gap: '12px', overflow: 'hidden', padding: '16px' }}>
-            <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <button onClick={loadSavedRuns} style={{ padding: '7px 10px', background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '6px', cursor: 'pointer' }}>↻ Làm mới</button>
-              {savedRuns.map(run => <button key={run.id} onClick={() => selectSavedRun(run.id)} style={{ textAlign: 'left', padding: '10px', borderRadius: '6px', cursor: 'pointer', border: selectedSavedRunId === run.id ? '1px solid #38bdf8' : '1px solid #1e293b', background: '#0f172a', color: '#e2e8f0' }}>
-                <strong>{run.status}</strong><br /><small>{run.startedAt} · {run.duration}ms</small>
-              </button>)}
-              {savedRuns.length === 0 && <span style={{ color: '#64748b', fontSize: '12px' }}>Chưa có lần chạy đã lưu.</span>}
+          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '320px 1fr', overflow: 'hidden' }}>
+            {/* Left Column: Runs list */}
+            <div style={{
+              borderRight: '1px solid var(--border-subtle)',
+              background: 'var(--bg-sidebar)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
+            }}>
+              {/* Header */}
+              <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>🗂️</span> Lịch sử thực thi ({savedRuns.length})
+                </span>
+                <button
+                  onClick={loadSavedRuns}
+                  style={{
+                    padding: '4px 9px',
+                    background: 'var(--bg-card)',
+                    color: 'var(--text-main)',
+                    border: '1px solid var(--border-card)',
+                    borderRadius: '5px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  ↻ Làm mới
+                </button>
+              </div>
+
+              {/* Filter pills */}
+              <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '4px' }}>
+                <button
+                  type="button"
+                  onClick={() => setHistoryFilter('all')}
+                  style={{
+                    flex: 1,
+                    padding: '4px 6px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: historyFilter === 'all' ? 'var(--bg-card)' : 'transparent',
+                    color: historyFilter === 'all' ? 'var(--color-primary)' : 'var(--text-muted)',
+                    boxShadow: historyFilter === 'all' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                  }}
+                >
+                  Tất cả ({savedRuns.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryFilter('passed')}
+                  style={{
+                    flex: 1,
+                    padding: '4px 6px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: historyFilter === 'passed' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                    color: historyFilter === 'passed' ? '#10b981' : 'var(--text-muted)'
+                  }}
+                >
+                  Đạt ({savedRuns.filter(r => r.status === 'PASSED').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryFilter('failed')}
+                  style={{
+                    flex: 1,
+                    padding: '4px 6px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderRadius: '4px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: historyFilter === 'failed' ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
+                    color: historyFilter === 'failed' ? '#ef4444' : 'var(--text-muted)'
+                  }}
+                >
+                  Lỗi ({savedRuns.filter(r => r.status === 'FAILED').length})
+                </button>
+              </div>
+
+              {/* List */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {savedRuns
+                  .filter(r => {
+                    if (historyFilter === 'passed') return r.status === 'PASSED';
+                    if (historyFilter === 'failed') return r.status === 'FAILED';
+                    return true;
+                  })
+                  .map(run => {
+                    const isSelected = selectedSavedRunId === run.id;
+                    const isPassed = run.status === 'PASSED';
+
+                    return (
+                      <div
+                        key={run.id}
+                        onClick={() => selectSavedRun(run.id)}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          border: isSelected ? '1px solid var(--color-primary)' : '1px solid var(--border-card)',
+                          background: isSelected ? 'var(--bg-active)' : 'var(--bg-card)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{
+                            fontSize: '10.5px',
+                            fontWeight: 800,
+                            padding: '2px 7px',
+                            borderRadius: '10px',
+                            background: isPassed ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                            color: isPassed ? '#10b981' : '#ef4444',
+                            border: isPassed ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)'
+                          }}>
+                            {isPassed ? 'PASSED ✅' : 'FAILED ❌'}
+                          </span>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                            {run.duration}ms
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                          <span style={{ fontSize: '11.5px', color: 'var(--text-main)' }}>
+                            {formatDateTime(run.startedAt)}
+                          </span>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                            {getRelativeTime(run.startedAt)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                {savedRuns.length === 0 && (
+                  <div style={{ padding: '36px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                    Chưa có lần chạy kịch bản nào được lưu.
+                  </div>
+                )}
+              </div>
             </div>
-            <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {savedResults.map(result => <div key={result.id} style={{ padding: '12px', borderRadius: '6px', border: result.status === 'PASSED' ? '1px solid rgba(16,185,129,.35)' : '1px solid rgba(239,68,68,.35)', background: '#0f172a' }}>
-                <strong style={{ color: result.status === 'PASSED' ? '#34d399' : '#f87171' }}>{result.status} · #{result.stepOrder} · {result.method} {result.httpStatus}</strong>
-                <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#94a3b8', marginTop: '5px' }}>{result.url} · {result.duration}ms</div>
-                {result.error && <pre style={{ whiteSpace: 'pre-wrap', color: '#fca5a5', fontSize: '11px' }}>{result.error}</pre>}
-              </div>)}
-              {selectedSavedRunId && savedResults.length === 0 && <span style={{ color: '#64748b', fontSize: '12px' }}>Lần chạy này không có bước đã thực thi.</span>}
+
+            {/* Right Column: Run Details & Step Inspector */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-app)' }}>
+              {selectedSavedRunId && savedResults.length > 0 ? (() => {
+                const currentSavedRun = savedRuns.find(r => r.id === selectedSavedRunId);
+                const activeSavedResult = savedResults.find(r => r.id === selectedSavedResultId) || savedResults[0];
+
+                const savedAssertions = parseJsonSafe(activeSavedResult?.assertionDetails, []);
+                const savedExtracted = parseJsonSafe(activeSavedResult?.extractedVars, {});
+
+                return (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    {/* Run Header Banner */}
+                    <div style={{
+                      padding: '14px 20px',
+                      background: 'var(--bg-surface-secondary)',
+                      borderBottom: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '12px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          background: currentSavedRun?.status === 'PASSED' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                          color: currentSavedRun?.status === 'PASSED' ? '#10b981' : '#ef4444',
+                          border: currentSavedRun?.status === 'PASSED' ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)'
+                        }}>
+                          {currentSavedRun?.status === 'PASSED' ? 'PASSED ✅' : 'FAILED ❌'}
+                        </span>
+                        <div>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
+                            Lần chạy lúc {formatDateTime(currentSavedRun?.startedAt)}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            Tổng thời gian: <strong>{currentSavedRun?.duration || 0}ms</strong> · Tổng số bước: <strong>{savedResults.length}</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleStartRun}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          background: 'var(--color-primary-bg)',
+                          color: 'var(--color-primary)',
+                          border: '1px solid rgba(56, 189, 248, 0.35)',
+                          padding: '7px 14px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ▶ Chạy Lại Kịch Bản Này
+                      </button>
+                    </div>
+
+                    {/* Step Navigator Bar */}
+                    <div style={{
+                      padding: '8px 16px',
+                      background: 'var(--bg-card)',
+                      borderBottom: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      gap: '8px',
+                      overflowX: 'auto',
+                      alignItems: 'center'
+                    }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', marginRight: '4px' }}>
+                        Các bước:
+                      </span>
+                      {savedResults.map(res => {
+                        const isStepSelected = (activeSavedResult?.id === res.id);
+                        const isPass = res.status === 'PASSED';
+                        return (
+                          <button
+                            key={res.id}
+                            type="button"
+                            onClick={() => setSelectedSavedResultId(res.id)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '5px 10px',
+                              borderRadius: '6px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              background: isStepSelected ? 'var(--color-primary-bg)' : 'var(--bg-surface-secondary)',
+                              color: isStepSelected ? 'var(--color-primary)' : 'var(--text-main)',
+                              border: isStepSelected ? '1px solid var(--color-primary)' : '1px solid var(--border-subtle)',
+                              whiteSpace: 'nowrap'
+                            }}
+                          >
+                            <span>#{res.stepOrder}</span>
+                            <span style={{
+                              fontSize: '9px',
+                              fontWeight: 800,
+                              padding: '1px 4px',
+                              borderRadius: '3px',
+                              ...getMethodBadgeStyle(res.method)
+                            }}>
+                              {res.method}
+                            </span>
+                            <span>{isPass ? '✅' : '❌'} {res.httpStatus || ''}</span>
+                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({res.duration}ms)</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Step Inspector Detail Pane */}
+                    {activeSavedResult && (
+                      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        {/* Step Header */}
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          borderBottom: '1px solid var(--border-subtle)',
+                          paddingBottom: '12px'
+                        }}>
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{
+                                padding: '2px 7px',
+                                borderRadius: '4px',
+                                fontSize: '10px',
+                                fontWeight: 800,
+                                fontFamily: 'monospace',
+                                ...getMethodBadgeStyle(activeSavedResult.method)
+                              }}>
+                                {activeSavedResult.method}
+                              </span>
+                              <h3 style={{ margin: 0, fontSize: '15px', color: 'var(--text-main)', fontWeight: 800 }}>
+                                Bước #{activeSavedResult.stepOrder}
+                              </h3>
+                            </div>
+                            <div style={{ fontSize: '12px', color: 'var(--color-primary)', fontFamily: 'monospace', marginTop: '4px' }}>
+                              {activeSavedResult.url}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            {(() => {
+                              const badge = getHttpStatusBadge(activeSavedResult.httpStatus);
+                              return (
+                                <span style={{
+                                  fontSize: '12px',
+                                  fontWeight: 800,
+                                  padding: '4px 10px',
+                                  borderRadius: '6px',
+                                  background: badge.bg,
+                                  color: badge.color,
+                                  border: `1px solid ${badge.border}`
+                                }}>
+                                  HTTP {badge.text}
+                                </span>
+                              );
+                            })()}
+                            <span style={{
+                              fontSize: '11px',
+                              color: 'var(--text-main)',
+                              background: 'var(--bg-surface-secondary)',
+                              padding: '4px 8px',
+                              borderRadius: '6px',
+                              border: '1px solid var(--border-card)',
+                              fontFamily: 'monospace'
+                            }}>
+                              ⏱️ {activeSavedResult.duration}ms
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Error trace if failed */}
+                        {activeSavedResult.error && (
+                          <div style={{
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            borderRadius: '8px',
+                            padding: '12px'
+                          }}>
+                            <div style={{ fontSize: '12px', fontWeight: 700, color: '#f87171', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                              <span>⚠️</span> Lỗi thực thi:
+                            </div>
+                            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#fca5a5', fontSize: '11.5px', fontFamily: 'monospace' }}>
+                              {activeSavedResult.error}
+                            </pre>
+                          </div>
+                        )}
+
+                        {/* Assertions Breakdown */}
+                        <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-card)' }}>
+                          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span>🎯</span> Kết Quả Kiểm Định (Assertions):
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {Array.isArray(savedAssertions) && savedAssertions.length > 0 ? (
+                              savedAssertions.map((ad: any, idx: number) => {
+                                const isPassed = ad.passed !== false;
+                                return (
+                                  <div
+                                    key={idx}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '8px',
+                                      fontSize: '12px',
+                                      padding: '7px 10px',
+                                      borderRadius: '4px',
+                                      background: isPassed ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                                      borderLeft: isPassed ? '3px solid #10b981' : '3px solid #ef4444',
+                                      color: isPassed ? '#10b981' : '#ef4444'
+                                    }}
+                                  >
+                                    <span>{isPassed ? '✅' : '❌'}</span>
+                                    <span style={{ flex: 1 }}>{ad.message || JSON.stringify(ad)}</span>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Không có assertion nào được cấu hình cho bước này.</div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Extracted Variables in this step */}
+                        {savedExtracted && Object.keys(savedExtracted).length > 0 && (
+                          <div style={{ background: 'var(--bg-card)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-card)' }}>
+                            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span>🔗</span> Biến đã trích xuất từ bước này:
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                              {Object.entries(savedExtracted).map(([k, v]) => (
+                                <span
+                                  key={k}
+                                  style={{
+                                    fontSize: '11px',
+                                    background: 'var(--color-primary-bg)',
+                                    color: 'var(--color-primary)',
+                                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                                    padding: '4px 10px',
+                                    borderRadius: '4px',
+                                    fontFamily: 'monospace'
+                                  }}
+                                >
+                                  {'{{' + k + '}}'} = {String(v)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Response Body Inspector */}
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px', minHeight: '220px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                Response Body:
+                              </span>
+                              {activeSavedResult.responseBody && (
+                                <span style={{
+                                  fontSize: '10px',
+                                  color: 'var(--text-muted)',
+                                  background: 'var(--bg-surface-secondary)',
+                                  padding: '1px 6px',
+                                  borderRadius: '4px',
+                                  border: '1px solid var(--border-subtle)'
+                                }}>
+                                  {new Blob([activeSavedResult.responseBody]).size} bytes
+                                </span>
+                              )}
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {/* Beautify / Raw toggle */}
+                              <div style={{
+                                display: 'flex',
+                                background: 'var(--bg-surface-secondary)',
+                                border: '1px solid var(--border-subtle)',
+                                borderRadius: '5px',
+                                padding: '2px'
+                              }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setHistoryBodyFormat('pretty')}
+                                  style={{
+                                    padding: '3px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    background: historyBodyFormat === 'pretty' ? 'var(--bg-card)' : 'transparent',
+                                    color: historyBodyFormat === 'pretty' ? 'var(--color-primary)' : 'var(--text-muted)',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    boxShadow: historyBodyFormat === 'pretty' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                                  }}
+                                >
+                                  <span>✨</span> Làm đẹp
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setHistoryBodyFormat('raw')}
+                                  style={{
+                                    padding: '3px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    background: historyBodyFormat === 'raw' ? 'var(--bg-card)' : 'transparent',
+                                    color: historyBodyFormat === 'raw' ? 'var(--color-primary)' : 'var(--text-muted)',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    boxShadow: historyBodyFormat === 'raw' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+                                  }}
+                                >
+                                  Raw
+                                </button>
+                              </div>
+
+                              {/* Copy button */}
+                              <button
+                                type="button"
+                                onClick={() => handleCopyHistoryBody(activeSavedResult.responseBody)}
+                                style={{
+                                  padding: '3px 8px',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  background: historyCopied ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-surface-secondary)',
+                                  color: historyCopied ? '#10b981' : 'var(--text-muted)',
+                                  border: `1px solid ${historyCopied ? 'rgba(16, 185, 129, 0.4)' : 'var(--border-subtle)'}`,
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '3px'
+                                }}
+                              >
+                                <span>{historyCopied ? '✓' : '📋'}</span> {historyCopied ? 'Đã sao chép' : 'Sao chép'}
+                              </button>
+                            </div>
+                          </div>
+
+                          <pre style={{
+                            flex: 1,
+                            minHeight: '200px',
+                            margin: 0,
+                            padding: '12px',
+                            background: 'var(--bg-card)',
+                            color: 'var(--color-primary)',
+                            borderRadius: '6px',
+                            border: '1px solid var(--border-card)',
+                            fontSize: '12px',
+                            fontFamily: 'monospace',
+                            overflowX: 'auto',
+                            lineHeight: '1.5',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word'
+                          }}>
+                            {(() => {
+                              if (!activeSavedResult.responseBody) return '(Rỗng)';
+                              if (historyBodyFormat === 'raw') return activeSavedResult.responseBody;
+                              try {
+                                return JSON.stringify(JSON.parse(activeSavedResult.responseBody), null, 2);
+                              } catch {
+                                return activeSavedResult.responseBody;
+                              }
+                            })()}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })() : (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+                  Chọn một lần chạy bên trái để xem báo cáo chi tiết.
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
-    </div>
-  );
-}
+    );
+
+    if (isPage) {
+      return (
+        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleExcelFileImport}
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+          />
+          {modalContent}
+        </div>
+      );
+    }
+
+    return (
+      <div style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(3, 7, 18, 0.85)',
+        backdropFilter: 'blur(10px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '24px'
+      }}>
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleExcelFileImport}
+          accept=".xlsx,.xls"
+          style={{ display: 'none' }}
+        />
+        {modalContent}
+      </div>
+    );
+  }

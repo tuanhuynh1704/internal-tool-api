@@ -74,13 +74,13 @@ export default function UIStepList({
           padding: '40px 20px',
           color: '#64748b',
           textAlign: 'center',
-          background: '#0a0e17',
+          background: 'var(--bg-card)',
           borderRadius: '8px',
-          border: '1px dashed #1e293b'
+          border: '1px dashed var(--border-card)'
         }}
       >
         <span style={{ fontSize: '32px', marginBottom: '8px' }}>🤖</span>
-        <div style={{ fontWeight: 600, fontSize: '13px', color: '#94a3b8' }}>No UI steps defined yet</div>
+        <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-muted)' }}>No UI steps defined yet</div>
         <div style={{ fontSize: '12px', marginTop: '4px' }}>
           Click <strong>"+ Add Step"</strong> or use sample templates to build your automation flow.
         </div>
@@ -104,8 +104,8 @@ export default function UIStepList({
               justifyContent: 'space-between',
               padding: '8px 12px',
               borderRadius: '6px',
-              background: isSelected ? '#1e293b' : '#0f172a',
-              border: isSelected ? '1px solid var(--color-primary)' : '1px solid #1e293b',
+              background: isSelected ? 'var(--bg-active)' : 'var(--bg-card)',
+              border: isSelected ? '1px solid var(--color-primary)' : '1px solid var(--border-card)',
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
@@ -116,7 +116,7 @@ export default function UIStepList({
                 style={{
                   fontSize: '11px',
                   fontFamily: 'var(--font-mono)',
-                  color: '#64748b',
+                  color: 'var(--text-dim)',
                   width: '18px',
                   fontWeight: 600
                 }}
@@ -156,7 +156,7 @@ export default function UIStepList({
                   style={{
                     fontSize: '12.5px',
                     fontWeight: isSelected ? 600 : 500,
-                    color: isSelected ? '#f8fafc' : '#cbd5e1',
+                    color: isSelected ? 'var(--text-main)' : 'var(--text-main)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'

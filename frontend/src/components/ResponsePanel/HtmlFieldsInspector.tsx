@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp, KeyValueRow, FormDataRow, ParamPair } from '../../context/AppContext';
+import { exportToJson, exportToCsv, exportToExcel } from '../../utils/exportHelper';
 
 export interface ExtractedField {
   id: string;
@@ -181,6 +182,60 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
     showToast(`✓ Đã sao chép chuỗi x-www-form-urlencoded`);
   };
 
+  const handleExportJson = async (fieldsToExport: ExtractedField[]) => {
+    const records = fieldsToExport.map((f, idx) => ({
+      'STT': idx + 1,
+      'Thẻ HTML': f.tagName,
+      'Loại': f.type,
+      'Tên (name)': f.name,
+      'ID (id)': f.elementId,
+      'Giá trị (value)': f.value,
+      'Placeholder': f.placeholder,
+      'Bắt buộc': f.required ? 'Có' : 'Không',
+      'Form #': f.formIndex !== null ? `Form ${f.formIndex + 1}` : 'Độc lập'
+    }));
+    const saved = await exportToJson(records, `html_fields_${Date.now()}.json`);
+    if (saved) {
+      showToast(`✓ Đã lưu ${records.length} trường dạng JSON!`);
+    }
+  };
+
+  const handleExportCsv = async (fieldsToExport: ExtractedField[]) => {
+    const records = fieldsToExport.map((f, idx) => ({
+      'STT': idx + 1,
+      'Thẻ HTML': f.tagName,
+      'Loại': f.type,
+      'Tên (name)': f.name,
+      'ID (id)': f.elementId,
+      'Giá trị (value)': f.value,
+      'Placeholder': f.placeholder,
+      'Bắt buộc': f.required ? 'Có' : 'Không',
+      'Form #': f.formIndex !== null ? `Form ${f.formIndex + 1}` : 'Độc lập'
+    }));
+    const saved = await exportToCsv(records, `html_fields_${Date.now()}.csv`);
+    if (saved) {
+      showToast(`✓ Đã lưu ${records.length} trường ra CSV!`);
+    }
+  };
+
+  const handleExportExcel = async (fieldsToExport: ExtractedField[]) => {
+    const records = fieldsToExport.map((f, idx) => ({
+      'STT': idx + 1,
+      'Thẻ HTML': f.tagName,
+      'Loại': f.type,
+      'Tên (name)': f.name,
+      'ID (id)': f.elementId,
+      'Giá trị (value)': f.value,
+      'Placeholder': f.placeholder,
+      'Bắt buộc': f.required ? 'Có' : 'Không',
+      'Form #': f.formIndex !== null ? `Form ${f.formIndex + 1}` : 'Độc lập'
+    }));
+    const saved = await exportToExcel(records, `html_fields_${Date.now()}.xlsx`, 'Trường HTML');
+    if (saved) {
+      showToast(`✓ Đã lưu ${records.length} trường ra Excel (.xlsx)!`);
+    }
+  };
+
   const handleApplyToRequestBody = (fieldsToApply: ExtractedField[], targetType: 'urlencoded' | 'formdata' | 'params') => {
     if (!activeTab) return;
 
@@ -340,7 +395,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
         background: 'var(--bg-app)'
       }}>
         <span style={{ fontSize: '38px', opacity: 0.6 }}>🔍</span>
-        <div style={{ fontSize: '14px', fontWeight: 600, color: '#f1f5f9' }}>
+        <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-main)' }}>
           Không tìm thấy trường nhập liệu trong tài liệu HTML
         </div>
         <div style={{ fontSize: '12px', maxWidth: '420px', textAlign: 'center', lineHeight: 1.5 }}>
@@ -369,7 +424,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
         }}>
           <thead>
             <tr style={{
-              background: '#0d1527',
+              background: 'var(--bg-surface-secondary)',
               color: 'var(--text-dim)',
               fontSize: '11px',
               textTransform: 'uppercase',
@@ -396,12 +451,12 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                 <tr
                   key={field.id}
                   style={{
-                    borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
-                    background: idx % 2 === 0 ? 'transparent' : 'rgba(255, 255, 255, 0.015)',
+                    borderBottom: '1px solid var(--border-subtle)',
+                    background: idx % 2 === 0 ? 'transparent' : 'var(--bg-card-hover)',
                     transition: 'background 0.1s ease'
                   }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(56, 189, 248, 0.05)'}
-                  onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? 'transparent' : 'rgba(255, 255, 255, 0.015)'}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-active)'}
+                  onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? 'transparent' : 'var(--bg-card-hover)'}
                 >
                   <td style={{ padding: '8px 12px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
                     {idx + 1}
@@ -412,7 +467,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                       <span style={{
                         fontFamily: 'var(--font-mono)',
                         fontWeight: 700,
-                        color: field.name ? '#f8fafc' : '#94a3b8',
+                        color: field.name ? 'var(--text-main)' : 'var(--text-muted)',
                         fontSize: '12px'
                       }}>
                         {field.name || (field.elementId ? `#${field.elementId}` : <em style={{ color: 'var(--text-dim)' }}>(không có tên)</em>)}
@@ -430,7 +485,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                             fontSize: '11px',
                             borderRadius: '3px'
                           }}
-                          onMouseEnter={e => e.currentTarget.style.color = '#38bdf8'}
+                          onMouseEnter={e => e.currentTarget.style.color = 'var(--color-primary)'}
                           onMouseLeave={e => e.currentTarget.style.color = 'var(--text-dim)'}
                         >
                           📋
@@ -450,9 +505,9 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                           flex: 1,
                           fontFamily: 'var(--font-mono)',
                           fontSize: '11.5px',
-                          color: field.type === 'hidden' ? '#e2e8f0' : '#38bdf8',
-                          background: '#090d16',
-                          border: '1px solid rgba(255, 255, 255, 0.08)',
+                          color: field.type === 'hidden' ? 'var(--text-main)' : 'var(--color-primary)',
+                          background: 'var(--bg-input)',
+                          border: '1px solid var(--border-card)',
                           borderRadius: '4px',
                           padding: '4px 8px',
                           wordBreak: 'break-all',
@@ -483,17 +538,17 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                           onClick={() => handleCopyText(field.value, 'giá trị')}
                           title="Sao chép giá trị"
                           style={{
-                            background: 'rgba(255, 255, 255, 0.05)',
-                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            background: 'var(--bg-badge)',
+                            border: '1px solid var(--border-subtle)',
                             borderRadius: '4px',
-                            color: '#94a3b8',
+                            color: 'var(--text-muted)',
                             cursor: 'pointer',
                             padding: '4px 6px',
                             fontSize: '11px',
                             flexShrink: 0
                           }}
-                          onMouseEnter={e => { e.currentTarget.style.color = '#38bdf8'; e.currentTarget.style.borderColor = '#38bdf8'; }}
-                          onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)'; }}
+                          onMouseEnter={e => { e.currentTarget.style.color = 'var(--color-primary)'; e.currentTarget.style.borderColor = 'var(--color-primary)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
                         >
                           📋
                         </button>
@@ -505,7 +560,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                     )}
 
                     {field.options && field.options.length > 0 && (
-                      <div style={{ marginTop: '4px', fontSize: '10.5px', color: '#94a3b8' }}>
+                      <div style={{ marginTop: '4px', fontSize: '10.5px', color: 'var(--text-muted)' }}>
                         Tùy chọn: {field.options.map(o => o.value || o.label).join(', ')}
                       </div>
                     )}
@@ -514,7 +569,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                   <td style={{ padding: '8px 12px' }}>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                       {field.elementId && (
-                        <span style={{ fontSize: '10px', background: 'rgba(255, 255, 255, 0.06)', padding: '1px 5px', borderRadius: '3px', color: '#cbd5e1' }}>
+                        <span style={{ fontSize: '10px', background: 'var(--bg-badge)', padding: '1px 5px', borderRadius: '3px', color: 'var(--text-muted)' }}>
                           id: {field.elementId}
                         </span>
                       )}
@@ -619,7 +674,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
       <div style={{
         padding: '10px 14px',
         borderBottom: '1px solid var(--border-card)',
-        background: '#0d131f',
+        background: 'var(--bg-surface-secondary)',
         display: 'flex',
         flexWrap: 'wrap',
         alignItems: 'center',
@@ -691,14 +746,14 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
               borderRadius: '5px',
               fontSize: '11px',
               fontWeight: 600,
-              background: 'rgba(255, 255, 255, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
-              color: '#f8fafc',
+              background: 'var(--bg-badge)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--text-main)',
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
-            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)'}
+            onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--color-primary)'}
+            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
           >
             <span>📄</span>
             <span>Chép JSON</span>
@@ -715,17 +770,80 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
               borderRadius: '5px',
               fontSize: '11px',
               fontWeight: 600,
-              background: 'rgba(255, 255, 255, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
-              color: '#f8fafc',
+              background: 'var(--bg-badge)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--text-main)',
               cursor: 'pointer',
               transition: 'all 0.15s ease'
             }}
-            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)'}
-            onMouseLeave={e => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.06)'}
+            onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--color-primary)'}
+            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
           >
             <span>🔗</span>
             <span>Chép Form-URL</span>
+          </button>
+
+          <button
+            onClick={() => handleExportJson(filteredAllFields)}
+            title="Tải toàn bộ trường ra file JSON"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 8px',
+              borderRadius: '5px',
+              fontSize: '11px',
+              fontWeight: 600,
+              background: 'rgba(16, 185, 129, 0.15)',
+              border: '1px solid rgba(16, 185, 129, 0.35)',
+              color: '#34d399',
+              cursor: 'pointer'
+            }}
+          >
+            <span>📄</span>
+            <span>Tải JSON</span>
+          </button>
+
+          <button
+            onClick={() => handleExportCsv(filteredAllFields)}
+            title="Tải toàn bộ trường ra file CSV (UTF-8)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 8px',
+              borderRadius: '5px',
+              fontSize: '11px',
+              fontWeight: 600,
+              background: 'rgba(245, 158, 11, 0.15)',
+              border: '1px solid rgba(245, 158, 11, 0.35)',
+              color: '#fbbf24',
+              cursor: 'pointer'
+            }}
+          >
+            <span>📊</span>
+            <span>Tải CSV</span>
+          </button>
+
+          <button
+            onClick={() => handleExportExcel(filteredAllFields)}
+            title="Tải toàn bộ trường ra file Excel (.xlsx)"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 8px',
+              borderRadius: '5px',
+              fontSize: '11px',
+              fontWeight: 600,
+              background: 'rgba(34, 197, 94, 0.15)',
+              border: '1px solid rgba(34, 197, 94, 0.35)',
+              color: '#22c55e',
+              cursor: 'pointer'
+            }}
+          >
+            <span>📗</span>
+            <span>Tải Excel</span>
           </button>
 
           <button
@@ -781,7 +899,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
       <div style={{
         padding: '6px 14px',
         borderBottom: '1px solid var(--border-card)',
-        background: '#0a0f19',
+        background: 'var(--bg-surface-secondary)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -800,10 +918,10 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
               width: '100%',
               padding: '4px 8px',
               fontSize: '11.5px',
-              background: '#050811',
+              background: 'var(--bg-input)',
               border: '1px solid var(--border-card)',
               borderRadius: '5px',
-              color: '#f8fafc',
+              color: 'var(--text-main)',
               outline: 'none'
             }}
           />
@@ -811,7 +929,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
 
         {/* Filters */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', background: '#050811', padding: '2px', borderRadius: '5px', border: '1px solid var(--border-card)' }}>
+          <div style={{ display: 'flex', background: 'var(--bg-input)', padding: '2px', borderRadius: '5px', border: '1px solid var(--border-card)' }}>
             <button
               onClick={() => setFilterType('all')}
               style={{
@@ -819,7 +937,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                 fontSize: '11px',
                 borderRadius: '4px',
                 background: filterType === 'all' ? 'var(--color-primary)' : 'transparent',
-                color: filterType === 'all' ? '#0b0f17' : 'var(--text-muted)',
+                color: filterType === 'all' ? '#ffffff' : 'var(--text-muted)',
                 fontWeight: 600,
                 cursor: 'pointer'
               }}
@@ -833,7 +951,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                 fontSize: '11px',
                 borderRadius: '4px',
                 background: filterType === 'hidden' ? '#c084fc' : 'transparent',
-                color: filterType === 'hidden' ? '#0b0f17' : 'var(--text-muted)',
+                color: filterType === 'hidden' ? '#ffffff' : 'var(--text-muted)',
                 fontWeight: 600,
                 cursor: 'pointer'
               }}
@@ -847,7 +965,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                 fontSize: '11px',
                 borderRadius: '4px',
                 background: filterType === 'text' ? 'var(--color-primary)' : 'transparent',
-                color: filterType === 'text' ? '#0b0f17' : 'var(--text-muted)',
+                color: filterType === 'text' ? '#ffffff' : 'var(--text-muted)',
                 fontWeight: 600,
                 cursor: 'pointer'
               }}
@@ -861,7 +979,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                 fontSize: '11px',
                 borderRadius: '4px',
                 background: filterType === 'select' ? 'var(--color-primary)' : 'transparent',
-                color: filterType === 'select' ? '#0b0f17' : 'var(--text-muted)',
+                color: filterType === 'select' ? '#ffffff' : 'var(--text-muted)',
                 fontWeight: 600,
                 cursor: 'pointer'
               }}
@@ -871,7 +989,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
           </div>
 
           {summary.formsCount > 0 && (
-            <div style={{ display: 'flex', background: '#050811', padding: '2px', borderRadius: '5px', border: '1px solid var(--border-card)' }}>
+            <div style={{ display: 'flex', background: 'var(--bg-input)', padding: '2px', borderRadius: '5px', border: '1px solid var(--border-card)' }}>
               <button
                 onClick={() => setViewGrouping('forms')}
                 style={{
@@ -925,17 +1043,17 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                 <div
                   key={form.index}
                   style={{
-                    background: '#0a0f1b',
+                    background: 'var(--bg-card)',
                     border: '1px solid var(--border-card)',
                     borderRadius: '8px',
                     overflow: 'hidden',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
                     flexShrink: 0
                   }}
                 >
                   <div style={{
                     padding: '8px 12px',
-                    background: 'linear-gradient(90deg, #0d1527 0%, #0a0f1b 100%)',
+                    background: 'var(--bg-surface-secondary)',
                     borderBottom: '1px solid var(--border-card)',
                     display: 'flex',
                     alignItems: 'center',
@@ -955,11 +1073,11 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                       }}>
                         {form.method}
                       </span>
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#f8fafc' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
                         Form #{fIdx + 1}
                       </span>
                       {form.id && (
-                        <span style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                           id="{form.id}"
                         </span>
                       )}
@@ -986,10 +1104,10 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
                         title="Sao chép form này thành JSON"
                         style={{
                           padding: '3px 7px',
-                          background: 'rgba(255, 255, 255, 0.06)',
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
+                          background: 'var(--bg-badge)',
+                          border: '1px solid var(--border-subtle)',
                           borderRadius: '4px',
-                          color: '#cbd5e1',
+                          color: 'var(--text-main)',
                           fontSize: '10.5px',
                           cursor: 'pointer'
                         }}
@@ -1022,7 +1140,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
 
             {summary.standaloneFields.length > 0 && (
               <div style={{
-                background: '#0a0f1b',
+                background: 'var(--bg-card)',
                 border: '1px solid var(--border-card)',
                 borderRadius: '8px',
                 overflow: 'hidden',
@@ -1030,13 +1148,13 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
               }}>
                 <div style={{
                   padding: '8px 12px',
-                  background: '#0d1527',
+                  background: 'var(--bg-surface-secondary)',
                   borderBottom: '1px solid var(--border-card)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between'
                 }}>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#f8fafc' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
                     🌐 Các trường ngoài Form ({summary.standaloneFields.filter(filterPredicate).length} trường)
                   </span>
                   <button
@@ -1061,7 +1179,7 @@ export default function HtmlFieldsInspector({ html }: HtmlFieldsInspectorProps) 
           </>
         ) : (
           <div style={{
-            background: '#0a0f1b',
+            background: 'var(--bg-card)',
             border: '1px solid var(--border-card)',
             borderRadius: '8px',
             overflow: 'hidden',

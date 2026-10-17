@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Sidebar from '../components/Sidebar/Sidebar';
 import Workspace from '../pages/Workspace/Workspace';
 import UpdateModal, { UpdateInfo, UpdatePhase } from '../components/UpdateModal/UpdateModal';
+import AutomationModal from '../components/AutomationModal/AutomationModal';
 import UITestModal from '../components/UITestModal/UITestModal';
 import UserGuideModal from '../components/UserGuideModal/UserGuideModal';
 
@@ -24,9 +25,8 @@ interface UpdateStatus {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function MainLayout() {
+  const [activeView, setActiveView] = useState<'workspace' | 'automation' | 'uitest'>('workspace');
   const [isEnvModalOpen, setIsEnvModalOpen] = useState(false);
-  const [isAutomationModalOpen, setIsAutomationModalOpen] = useState(false);
-  const [isUITestModalOpen, setIsUITestModalOpen] = useState(false);
   const [isUserGuideOpen, setIsUserGuideOpen] = useState(false);
 
   // ── Update state ──────────────────────────────────────────────────────────
@@ -88,7 +88,9 @@ export default function MainLayout() {
       setDownloadPercent(0);
       setUpdateError(undefined);
       try {
-        await StartDownloadUpdate(updateInfo.Version, updateInfo.URL, updateInfo.SHA256);
+        // The backend downloads the update it verified in CheckForUpdate; the
+        // URL/checksum are intentionally not passed from the UI.
+        await StartDownloadUpdate();
       } catch (err: any) {
         setUpdatePhase('error');
         setUpdateError(err?.message ?? String(err));
@@ -131,18 +133,22 @@ export default function MainLayout() {
       color: 'var(--text-main)',
       fontFamily: 'var(--font-sans)'
     }}>
-      {/* Sidebar cố định bên trái (280px) */}
+      {/* Sidebar cố định bên trái (310px ở Workspace, 50px khi ở Automation hoặc UITest) */}
       <div style={{
-        width: '280px',
+        width: activeView === 'workspace' ? '310px' : '50px',
         flexShrink: 0,
         height: '100%',
         display: 'flex',
-        flexDirection: 'column'
+        flexDirection: 'column',
+        transition: 'width 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+        overflow: 'hidden'
       }}>
         <Sidebar
+          activeView={activeView}
+          onSelectView={setActiveView}
           onOpenEnvModal={() => setIsEnvModalOpen(true)}
-          onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
-          onOpenUITestModal={() => setIsUITestModalOpen(true)}
+          onOpenAutomationModal={() => setActiveView('automation')}
+          onOpenUITestModal={() => setActiveView('uitest')}
           onOpenUserGuide={() => setIsUserGuideOpen(true)}
         />
       </div>
@@ -153,25 +159,57 @@ export default function MainLayout() {
         height: '100%',
         overflow: 'hidden',
         display: 'flex',
-        flexDirection: 'column'
+        flexDirection: 'column',
+        position: 'relative'
       }}>
-        <Workspace
-          isEnvModalOpen={isEnvModalOpen}
-          setIsEnvModalOpen={setIsEnvModalOpen}
-          isAutomationModalOpen={isAutomationModalOpen}
-          setIsAutomationModalOpen={setIsAutomationModalOpen}
-          isUITestModalOpen={isUITestModalOpen}
-          setIsUITestModalOpen={setIsUITestModalOpen}
-          isUserGuideOpen={isUserGuideOpen}
-          setIsUserGuideOpen={setIsUserGuideOpen}
-        />
-      </div>
+        {/* Workspace (API Client) */}
+        <div style={{
+          width: '100%',
+          height: '100%',
+          display: activeView === 'workspace' ? 'flex' : 'none',
+          flexDirection: 'column',
+          overflow: 'hidden'
+        }}>
+          <Workspace
+            isEnvModalOpen={isEnvModalOpen}
+            setIsEnvModalOpen={setIsEnvModalOpen}
+            isUserGuideOpen={isUserGuideOpen}
+            setIsUserGuideOpen={setIsUserGuideOpen}
+            onNavigateAutomation={() => setActiveView('automation')}
+            onNavigateUITest={() => setActiveView('uitest')}
+          />
+        </div>
 
-      {/* UI Automation Testing Modal */}
-      <UITestModal
-        isOpen={isUITestModalOpen}
-        onClose={() => setIsUITestModalOpen(false)}
-      />
+        {/* Automation Test Suite Page */}
+        <div style={{
+          width: '100%',
+          height: '100%',
+          display: activeView === 'automation' ? 'flex' : 'none',
+          flexDirection: 'column',
+          overflow: 'hidden'
+        }}>
+          <AutomationModal
+            isPage={true}
+            isOpen={activeView === 'automation'}
+            onClose={() => setActiveView('workspace')}
+          />
+        </div>
+
+        {/* UI Automation Studio Page */}
+        <div style={{
+          width: '100%',
+          height: '100%',
+          display: activeView === 'uitest' ? 'flex' : 'none',
+          flexDirection: 'column',
+          overflow: 'hidden'
+        }}>
+          <UITestModal
+            isPage={true}
+            isOpen={activeView === 'uitest'}
+            onClose={() => setActiveView('workspace')}
+          />
+        </div>
+      </div>
 
       {/* User Guide & Documentation Modal */}
       <UserGuideModal

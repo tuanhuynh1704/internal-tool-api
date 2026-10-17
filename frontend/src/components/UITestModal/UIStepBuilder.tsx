@@ -125,8 +125,8 @@ export default function UIStepBuilder({
   return (
     <div
       style={{
-        background: '#0f172a',
-        border: '1px solid #1e293b',
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-card)',
         borderRadius: '8px',
         padding: '16px',
         display: 'flex',
@@ -134,11 +134,11 @@ export default function UIStepBuilder({
         gap: '14px'
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #1e293b', paddingBottom: '10px' }}>
-        <div style={{ fontWeight: 700, fontSize: '13px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '10px' }}>
+        <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{
             background: isAssertion ? 'rgba(168, 85, 247, 0.15)' : 'rgba(56, 189, 248, 0.15)',
-            color: isAssertion ? '#c084fc' : '#38bdf8',
+            color: isAssertion ? '#c084fc' : 'var(--color-primary)',
             padding: '2px 8px',
             borderRadius: '4px',
             fontSize: '11px',
@@ -148,24 +148,24 @@ export default function UIStepBuilder({
           </span>
           <span>{step ? 'Edit UI Step' : 'Add New UI Step'}</span>
         </div>
-        <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-          Supports <code style={{ color: '#38bdf8' }}>&#123;&#123;variable&#125;&#125;</code>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          Supports <code style={{ color: 'var(--color-primary)' }}>&#123;&#123;variable&#125;&#125;</code>
         </span>
       </div>
 
       {/* Row 1: Step Type & Timeout */}
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Step Action / Assertion</label>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Step Action / Assertion</label>
           <select
             value={type}
             onChange={(e) => setType(e.target.value)}
             style={{
               padding: '7px 10px',
               borderRadius: '6px',
-              background: '#0a0e17',
-              color: '#f8fafc',
-              border: '1px solid #334155',
+              background: 'var(--bg-input)',
+              color: 'var(--text-main)',
+              border: '1px solid var(--border-card)',
               fontSize: '12px',
               fontWeight: 600
             }}
@@ -184,7 +184,7 @@ export default function UIStepBuilder({
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Timeout (ms)</label>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Timeout (ms)</label>
           <input
             type="number"
             min={100}
@@ -194,9 +194,9 @@ export default function UIStepBuilder({
             style={{
               padding: '7px 10px',
               borderRadius: '6px',
-              background: '#0a0e17',
-              color: '#f8fafc',
-              border: '1px solid #334155',
+              background: 'var(--bg-input)',
+              color: 'var(--text-main)',
+              border: '1px solid var(--border-card)',
               fontSize: '12px',
               fontFamily: 'var(--font-mono)'
             }}
@@ -208,7 +208,7 @@ export default function UIStepBuilder({
       {/* 1. Navigate */}
       {type === 'navigate' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
             Target URL / Path (e.g. <code>https://example.com/login</code> or <code>/dashboard</code>)
           </label>
           <input
@@ -219,9 +219,9 @@ export default function UIStepBuilder({
             style={{
               padding: '8px 10px',
               borderRadius: '6px',
-              background: '#0a0e17',
-              color: '#f8fafc',
-              border: '1px solid #334155',
+              background: 'var(--bg-input)',
+              color: 'var(--text-main)',
+              border: '1px solid var(--border-card)',
               fontSize: '12px',
               fontFamily: 'var(--font-mono)'
             }}
@@ -232,7 +232,7 @@ export default function UIStepBuilder({
       {/* 2. Selector-based Actions (Click, DblClick, Input, Select, Check, etc.) */}
       {type !== 'navigate' && type !== 'assert_url' && type !== 'assert_title' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
             CSS / XPath / Text Selector (e.g. <code>#login-btn</code>, <code>button:has-text("Submit")</code>)
           </label>
           <input
@@ -243,9 +243,9 @@ export default function UIStepBuilder({
             style={{
               padding: '8px 10px',
               borderRadius: '6px',
-              background: '#0a0e17',
-              color: '#f8fafc',
-              border: '1px solid #334155',
+              background: 'var(--bg-input)',
+              color: 'var(--text-main)',
+              border: '1px solid var(--border-card)',
               fontSize: '12px',
               fontFamily: 'var(--font-mono)'
             }}
@@ -256,7 +256,7 @@ export default function UIStepBuilder({
       {/* 3. Input Text / Select / File / Key Value */}
       {(type === 'input' || type === 'select' || type === 'upload_file') && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
             {type === 'input' ? 'Input Text / Value' : type === 'select' ? 'Option Value or Label' : 'File Path'}
           </label>
           <input
@@ -267,9 +267,9 @@ export default function UIStepBuilder({
             style={{
               padding: '8px 10px',
               borderRadius: '6px',
-              background: '#0a0e17',
-              color: '#f8fafc',
-              border: '1px solid #334155',
+              background: 'var(--bg-input)',
+              color: 'var(--text-main)',
+              border: '1px solid var(--border-card)',
               fontSize: '12px'
             }}
           />
@@ -280,7 +280,7 @@ export default function UIStepBuilder({
       {type === 'press_key' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Key to Press</label>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Key to Press</label>
             <input
               type="text"
               placeholder="Enter, Tab, Escape, ArrowDown, Control+A"
@@ -289,17 +289,17 @@ export default function UIStepBuilder({
               style={{
                 padding: '7px 10px',
                 borderRadius: '6px',
-                background: '#0a0e17',
-                color: '#f8fafc',
-                border: '1px solid #334155',
+                background: 'var(--bg-input)',
+                color: 'var(--text-main)',
+                border: '1px solid var(--border-card)',
                 fontSize: '12px',
                 fontFamily: 'var(--font-mono)'
               }}
             />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Target (optional)</label>
-            <span style={{ fontSize: '11px', color: '#64748b', marginTop: '6px' }}>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Target (optional)</label>
+            <span style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '6px' }}>
               Leaves body focused if selector is empty
             </span>
           </div>
@@ -310,7 +310,7 @@ export default function UIStepBuilder({
       {type === 'wait' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Delay Milliseconds</label>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Delay Milliseconds</label>
             <input
               type="number"
               placeholder="1000"
@@ -319,25 +319,25 @@ export default function UIStepBuilder({
               style={{
                 padding: '7px 10px',
                 borderRadius: '6px',
-                background: '#0a0e17',
-                color: '#f8fafc',
-                border: '1px solid #334155',
+                background: 'var(--bg-input)',
+                color: 'var(--text-main)',
+                border: '1px solid var(--border-card)',
                 fontSize: '12px',
                 fontFamily: 'var(--font-mono)'
               }}
             />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Selector Wait State</label>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Selector Wait State</label>
             <select
               value={waitState}
               onChange={(e) => setWaitState(e.target.value)}
               style={{
                 padding: '7px 10px',
                 borderRadius: '6px',
-                background: '#0a0e17',
-                color: '#f8fafc',
-                border: '1px solid #334155',
+                background: 'var(--bg-input)',
+                color: 'var(--text-main)',
+                border: '1px solid var(--border-card)',
                 fontSize: '12px'
               }}
             >
@@ -355,7 +355,7 @@ export default function UIStepBuilder({
         <div style={{ display: 'grid', gridTemplateColumns: type === 'assert_attribute' ? '1fr 1fr 2fr' : '1fr 2fr', gap: '10px' }}>
           {type === 'assert_attribute' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Attribute Name</label>
+              <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Attribute Name</label>
               <input
                 type="text"
                 placeholder="href, src, disabled, class"
@@ -364,9 +364,9 @@ export default function UIStepBuilder({
                 style={{
                   padding: '7px 10px',
                   borderRadius: '6px',
-                  background: '#0a0e17',
-                  color: '#f8fafc',
-                  border: '1px solid #334155',
+                  background: 'var(--bg-input)',
+                  color: 'var(--text-main)',
+                  border: '1px solid var(--border-card)',
                   fontSize: '12px',
                   fontFamily: 'var(--font-mono)'
                 }}
@@ -375,16 +375,16 @@ export default function UIStepBuilder({
           )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Comparison Operator</label>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Comparison Operator</label>
             <select
               value={operator}
               onChange={(e) => setOperator(e.target.value)}
               style={{
                 padding: '7px 10px',
                 borderRadius: '6px',
-                background: '#0a0e17',
-                color: '#f8fafc',
-                border: '1px solid #334155',
+                background: 'var(--bg-input)',
+                color: 'var(--text-main)',
+                border: '1px solid var(--border-card)',
                 fontSize: '12px'
               }}
             >
@@ -396,7 +396,7 @@ export default function UIStepBuilder({
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Expected Value</label>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>Expected Value</label>
             <input
               type="text"
               placeholder="Expected text, substring or {{variable}}"
@@ -405,9 +405,9 @@ export default function UIStepBuilder({
               style={{
                 padding: '7px 10px',
                 borderRadius: '6px',
-                background: '#0a0e17',
-                color: '#f8fafc',
-                border: '1px solid #334155',
+                background: 'var(--bg-input)',
+                color: 'var(--text-main)',
+                border: '1px solid var(--border-card)',
                 fontSize: '12px'
               }}
             />
@@ -422,9 +422,9 @@ export default function UIStepBuilder({
           style={{
             padding: '6px 14px',
             borderRadius: '6px',
-            background: '#1e293b',
-            color: '#94a3b8',
-            border: 'none',
+            background: 'var(--bg-active)',
+            color: 'var(--text-muted)',
+            border: '1px solid var(--border-card)',
             fontSize: '12px',
             fontWeight: 600,
             cursor: 'pointer'
@@ -438,7 +438,7 @@ export default function UIStepBuilder({
             padding: '6px 16px',
             borderRadius: '6px',
             background: 'var(--color-primary)',
-            color: '#0b0f17',
+            color: '#ffffff',
             border: 'none',
             fontSize: '12px',
             fontWeight: 700,

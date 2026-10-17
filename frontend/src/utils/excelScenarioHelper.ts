@@ -43,24 +43,110 @@ export interface ScenarioModel {
   steps: ScenarioStepModel[];
 }
 
-// Convert assertions list to string format for Excel representation
+const OPERATOR_SYMBOL: Record<AssertionRule['operator'], string> = {
+  eq: '==', neq: '!=', contains: 'contains', gt: '>', gte: '>=', lt: '<', lte: '<=', regex: 'matches', exists: 'exists', not_exists: 'not_exists'
+};
+
+/** Quotes a value so ";" or spaces inside it survive the Excel round trip. */
+function quoteValue(value: string): string {
+  return `"${String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function unquoteValue(value: string): string {
+  const v = value.trim();
+  if (v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))) {
+    return v.slice(1, -1).replace(/\\(["'\\])/g, '$1');
+  }
+  return v;
+}
+
+/** Splits on ";" that are outside single/double quotes. */
+export function splitStatements(str: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: string | null = null;
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (quote) {
+      if (c === '\\' && i + 1 < str.length) {
+        current += c + str[++i];
+        continue;
+      }
+      if (c === quote) quote = null;
+      current += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      current += c;
+    } else if (c === ';') {
+      if (current.trim()) parts.push(current.trim());
+      current = '';
+    } else {
+      current += c;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+// Convert assertions list to string format for Excel representation.
+// Every rule is written with an explicit operator and a quoted value so that
+// parseAssertionsString(stringifyAssertions(x)) returns x.
 export function stringifyAssertions(assertions: AssertionRule[]): string {
   if (!assertions || assertions.length === 0) return '';
   return assertions.map(a => {
-    if (a.type === 'status') return `status == ${a.expected}`;
-    if (a.type === 'time') return `time < ${a.expected}`;
-    if (a.type === 'header') return `header[${a.target}] ${a.operator} "${a.expected}"`;
-    return `${a.target || '$.'} ${a.operator} ${a.expected}`;
+    const op = OPERATOR_SYMBOL[a.operator] || '==';
+    const valuePart = a.operator === 'exists' || a.operator === 'not_exists' ? '' : ` ${quoteValue(a.expected)}`;
+    if (a.type === 'status') return `status ${op}${valuePart}`;
+    if (a.type === 'time') return `time ${op}${valuePart}`;
+    if (a.type === 'header') return `header[${a.target}] ${op}${valuePart}`;
+    if (a.type === 'body_text') return `body ${op}${valuePart}`;
+    return `${a.target || '$'} ${op}${valuePart}`;
   }).join('; ');
 }
+
+const SYMBOL_TO_OPERATOR: Record<string, AssertionRule['operator']> = {
+  '==': 'eq', '=': 'eq', eq: 'eq', '!=': 'neq', neq: 'neq', contains: 'contains', '>': 'gt', gt: 'gt', '>=': 'gte', gte: 'gte',
+  '<': 'lt', lt: 'lt', '<=': 'lte', lte: 'lte', matches: 'regex', regex: 'regex', exists: 'exists', not_exists: 'not_exists'
+};
+const OPERATOR_PATTERN = String.raw`(==|!=|>=|<=|>|<|=|\beq\b|\bneq\b|\bgte\b|\blte\b|\bgt\b|\blt\b|contains|matches|regex|not_exists|exists)`;
 
 // Parse string from Excel to AssertionRule array
 export function parseAssertionsString(str: string): AssertionRule[] {
   if (!str || !str.trim()) return [];
   const rules: AssertionRule[] = [];
-  const parts = str.split(';').map(p => p.trim()).filter(Boolean);
+  const parts = splitStatements(str);
 
   for (const part of parts) {
+    // Generic "<subject> <operator> [value]" form produced by stringifyAssertions
+    const generic = new RegExp(String.raw`^(status|time|latency|body|header\[(.*?)\]|\$[^\s=!<>]*)\s*${OPERATOR_PATTERN}\s*(.*)$`, 'i').exec(part);
+    if (generic) {
+      const subject = generic[1];
+      const operator = SYMBOL_TO_OPERATOR[generic[3].toLowerCase()];
+      const expected = unquoteValue(generic[4] || '');
+      const lower = subject.toLowerCase();
+      if (operator) {
+        if (lower === 'status') {
+          rules.push({ type: 'status', operator, expected });
+          continue;
+        }
+        if (lower === 'time' || lower === 'latency') {
+          rules.push({ type: 'time', operator, expected });
+          continue;
+        }
+        if (lower === 'body') {
+          rules.push({ type: 'body_text', operator, expected });
+          continue;
+        }
+        if (lower.startsWith('header[')) {
+          rules.push({ type: 'header', target: (generic[2] || '').trim(), operator, expected });
+          continue;
+        }
+        rules.push({ type: 'body_json', target: subject.trim(), operator, expected });
+        continue;
+      }
+    }
+
+    // Legacy forms: "status 200" (no operator) and friends.
     // Check status e.g. "status == 200" or "status = 200" or "status 200"
     const statusMatch = part.match(/^status\s*(==|=|eq)?\s*(\d+)/i);
     if (statusMatch) {
@@ -137,7 +223,7 @@ export function stringifyExtractVars(vars: VariableExtraction[]): string {
 export function parseExtractVarsString(str: string): VariableExtraction[] {
   if (!str || !str.trim()) return [];
   const res: VariableExtraction[] = [];
-  const parts = str.split(';').map(p => p.trim()).filter(Boolean);
+  const parts = splitStatements(str);
 
   for (const part of parts) {
     const eqIdx = part.indexOf('=');

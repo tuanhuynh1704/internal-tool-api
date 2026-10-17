@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"internal-api-client/core"
 	coreui "internal-api-client/core/ui"
+	"internal-api-client/internal/security"
+	"internal-api-client/internal/security/antidebug"
 	"internal-api-client/internal/updater"
 	"log"
 	"os"
@@ -20,9 +23,27 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// UpdateManifestURL is the single source of truth for the update manifest location.
-// Change this if the release server moves.
-const UpdateManifestURL = "https://github.com/TuansHuynh/internal-tool-api/releases/latest/download/latest.json"
+// Obfuscated manifest URL to prevent plaintext search in compiled binary (.rdata)
+var (
+	manifestURLMaskKey = []byte{0x4D, 0x92, 0x1B, 0x7E, 0x83, 0x5C, 0xA1, 0x3F}
+	manifestURLMasked  = []byte{
+		0x25, 0xe6, 0x6f, 0xe, 0xf0, 0x66, 0x8e, 0x10,
+		0x2a, 0xfb, 0x6f, 0x16, 0xf6, 0x3e, 0x8f, 0x5c,
+		0x22, 0xff, 0x34, 0x2a, 0xf6, 0x3d, 0xcf, 0x4c,
+		0x5, 0xe7, 0x62, 0x10, 0xeb, 0x73, 0xc8, 0x51,
+		0x39, 0xf7, 0x69, 0x10, 0xe2, 0x30, 0x8c, 0x4b,
+		0x22, 0xfd, 0x77, 0x53, 0xe2, 0x2c, 0xc8, 0x10,
+		0x3f, 0xf7, 0x77, 0x1b, 0xe2, 0x2f, 0xc4, 0x4c,
+		0x62, 0xfe, 0x7a, 0xa, 0xe6, 0x2f, 0xd5, 0x10,
+		0x29, 0xfd, 0x6c, 0x10, 0xef, 0x33, 0xc0, 0x5b,
+		0x62, 0xfe, 0x7a, 0xa, 0xe6, 0x2f, 0xd5, 0x11,
+		0x27, 0xe1, 0x74, 0x10,
+	}
+)
+
+func getUpdateManifestURL() string {
+	return security.Deobfuscate(manifestURLMasked, manifestURLMaskKey)
+}
 
 //go:embed version.json
 var versionJsonData []byte
@@ -75,8 +96,10 @@ type App struct {
 	downloadMu        sync.Mutex
 	downloadPercent   int64  // atomic, 0–100
 	downloadedPath    string // path of the fully downloaded & verified binary
-	downloadedVersion string // version string of the downloaded binary
-	downloadPhase     string // "idle" | "downloading" | "done" | "error"
+	downloadedVersion string              // version string of the downloaded binary
+	downloadedSHA256  string              // checksum the updater re-verifies before installing
+	downloadPhase     string              // "idle" | "downloading" | "done" | "error"
+	pendingUpdate     *updater.UpdateInfo // last manifest entry from CheckForUpdate
 
 	streamMu       sync.Mutex
 	streamCancels  map[string]context.CancelFunc
@@ -120,34 +143,27 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
-	// Clean up any lingering .bak files in background
+	// Anti-reverse engineering & runtime anti-debugging defense (active in production builds)
+	env := wailsRuntime.Environment(ctx)
+	if env.BuildType != "dev" && os.Getenv("WAILS_ENV") != "dev" {
+		antidebug.StartWatcher(antidebug.DefaultConfig())
+	}
+
+	// Remove the backup left by a previous update — only our own "<exe>.bak",
+	// never other .bak files that happen to share the folder (e.g. Desktop).
+	// The delay leaves the updater's post-start health check time to roll back.
 	go func() {
+		time.Sleep(30 * time.Second)
 		exePath, err := os.Executable()
 		if err != nil {
 			return
 		}
-		dir := filepath.Dir(exePath)
-		currentExe := filepath.Base(exePath)
-
-		if entries, err := os.ReadDir(dir); err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				name := entry.Name()
-				if name == currentExe || name == "updater.exe" {
-					continue
-				}
-				// Remove old backup files
-				if strings.HasSuffix(name, ".bak") {
-					_ = os.Remove(filepath.Join(dir, name))
-				}
-			}
-		}
+		_ = os.Remove(exePath + ".bak")
+		_ = os.Remove(exePath + ".new")
 	}()
 }
 
-// ─── App Info ─────────────────────────────────────────────────────────────────
+// ─── App Info & Security Status ───────────────────────────────────────────────
 
 func (a *App) GetAppInfo() AppInfo {
 	var info AppInfo
@@ -164,6 +180,25 @@ func (a *App) GetAppInfo() AppInfo {
 	return info
 }
 
+// CheckSecurityStatus returns current runtime anti-reverse engineering and binary integrity state.
+func (a *App) CheckSecurityStatus() map[string]interface{} {
+	threats := antidebug.CheckAll()
+	envThreat, envDesc := security.VerifyEnvironment()
+	binaryErr := security.ValidateBinaryState()
+
+	res := map[string]interface{}{
+		"isSecure":    len(threats) == 0 && !envThreat && binaryErr == nil,
+		"threatCount": len(threats),
+	}
+	if envThreat {
+		res["environmentWarning"] = envDesc
+	}
+	if binaryErr != nil {
+		res["binaryWarning"] = binaryErr.Error()
+	}
+	return res
+}
+
 // ─── Update API (Wails-bound methods callable from frontend) ──────────────────
 
 // CheckForUpdate fetches the manifest and returns UpdateInfo if a newer version
@@ -171,27 +206,48 @@ func (a *App) GetAppInfo() AppInfo {
 // On network failure: logs the error and returns it — the frontend handles it gracefully.
 func (a *App) CheckForUpdate() (*updater.UpdateInfo, error) {
 	info := a.GetAppInfo()
-	result, err := updater.CheckForUpdate(UpdateManifestURL, info.Version)
+	manifestURL := getUpdateManifestURL()
+	result, err := updater.CheckForUpdate(manifestURL, info.Version)
 	if err != nil {
 		log.Printf("[app] update check failed (non-fatal): %v", err)
 		return nil, fmt.Errorf("update check: %w", err)
 	}
+	if result != nil {
+		if err := updater.ValidateDownloadURL(manifestURL, result.URL); err != nil {
+			return nil, fmt.Errorf("update manifest rejected: %w", err)
+		}
+	}
+	a.downloadMu.Lock()
+	a.pendingUpdate = result
+	a.downloadMu.Unlock()
 	return result, nil
 }
 
-// StartDownloadUpdate begins downloading the new binary in a background goroutine.
-// Progress events ("updater:status") are emitted via Wails EventsEmit so the
-// frontend progress bar updates in real time without polling.
-func (a *App) StartDownloadUpdate(version, url, sha256 string) error {
+// StartDownloadUpdate downloads the update found by the last CheckForUpdate.
+// The URL and checksum come from the manifest held by the backend, never from
+// the frontend, so script running in the WebView cannot choose what is installed.
+// Progress events ("updater:status") are emitted via Wails EventsEmit.
+func (a *App) StartDownloadUpdate() error {
 	a.downloadMu.Lock()
 	if a.downloadPhase == "downloading" {
 		a.downloadMu.Unlock()
 		return fmt.Errorf("download already in progress")
 	}
-	dest := updater.DownloadDestination(version)
+	pending := a.pendingUpdate
+	if pending == nil {
+		a.downloadMu.Unlock()
+		return fmt.Errorf("no update available — check for updates first")
+	}
+	dest, err := updater.DownloadDestination(pending.Version)
+	if err != nil {
+		a.downloadMu.Unlock()
+		return fmt.Errorf("invalid update version: %w", err)
+	}
+	version, url, sha256 := pending.Version, pending.URL, pending.SHA256
 	a.downloadPhase = "downloading"
 	a.downloadedPath = ""
 	a.downloadedVersion = version
+	a.downloadedSHA256 = sha256
 	atomic.StoreInt64(&a.downloadPercent, 0)
 	a.downloadMu.Unlock()
 
@@ -199,7 +255,7 @@ func (a *App) StartDownloadUpdate(version, url, sha256 string) error {
 
 	go func() {
 		client := updater.NewDownloadClient()
-		downloadErr := updater.DownloadUpdate(client, url, sha256, dest, func(downloaded, total int64) {
+		downloadErr := updater.DownloadUpdate(context.Background(), client, url, sha256, dest, func(downloaded, total int64) {
 			var pct int64
 			if total > 0 {
 				pct = downloaded * 100 / total
@@ -246,6 +302,7 @@ func (a *App) ApplyUpdate() error {
 	a.downloadMu.Lock()
 	phase := a.downloadPhase
 	src := a.downloadedPath
+	expectedSHA := a.downloadedSHA256
 	a.downloadMu.Unlock()
 
 	if phase != "done" || src == "" {
@@ -265,7 +322,7 @@ func (a *App) ApplyUpdate() error {
 	}
 
 	pid := os.Getpid()
-	if err = updater.LaunchUpdaterProcess(binary, pid, src, exePath, exePath); err != nil {
+	if err = updater.LaunchUpdaterProcess(binary, pid, src, exePath, exePath, expectedSHA); err != nil {
 		return fmt.Errorf("launch updater: %w", err)
 	}
 
@@ -316,13 +373,17 @@ func (a *App) ExecuteStreamRequest(reqID string, payload core.RequestPayload) er
 
 	go func() {
 		defer func() {
+			cancel()
 			a.streamMu.Lock()
 			if a.streamVersions[reqID] == version {
 				delete(a.streamCancels, reqID)
+				delete(a.streamVersions, reqID)
 			}
 			a.streamMu.Unlock()
 		}()
 
+		// ExecuteStream always emits a final IsEnd chunk (with the error, if
+		// any), so the frontend can leave its loading state on every path.
 		_ = a.engine.ExecuteStream(ctx, payload, reqID, func(chunk core.StreamChunk) {
 			if a.ctx != nil {
 				wailsRuntime.EventsEmit(a.ctx, "stream:chunk:"+reqID, chunk)
@@ -456,6 +517,13 @@ func (a *App) UpdateRequestInDB(req DBRequest) error {
 		return nil
 	}
 	return a.dbManager.UpdateRequest(req)
+}
+
+func (a *App) RenameRequestInDB(id, name string) error {
+	if a.dbManager == nil {
+		return nil
+	}
+	return a.dbManager.RenameRequest(id, name)
 }
 
 func (a *App) DeleteRequestInDB(id string) error {
@@ -626,16 +694,10 @@ func (a *App) ImportPostmanCollection(collectionJSON string) (PostmanImportResul
 
 // ─── Workspace Export / Import ────────────────────────────────────────────────
 
-type FullWorkspaceExport struct {
-	Projects     []DBProject     `json:"projects"`
-	Folders      []DBFolder      `json:"folders"`
-	Requests     []DBRequest     `json:"requests"`
-	Environments []DBEnvironment `json:"environments"`
-	Scenarios    []DBScenario    `json:"scenarios,omitempty"`
-	Version      string          `json:"version"`
-}
-
-func (a *App) ExportFullWorkspace() (string, error) {
+// ExportFullWorkspace serialises the workspace. Unless includeSecrets is true,
+// tokens, passwords and secret-looking variables are blanked so the backup can
+// be shared safely; importing it back keeps the secrets already stored.
+func (a *App) ExportFullWorkspace(includeSecrets bool) (string, error) {
 	data, err := a.GetAllProjectsData()
 	if err != nil {
 		return "", err
@@ -651,13 +713,81 @@ func (a *App) ExportFullWorkspace() (string, error) {
 		Requests:     data.Requests,
 		Environments: envs,
 		Scenarios:    scenarios,
-		Version:      "2.1",
+		Version:      "2.2",
+	}
+	if !includeSecrets {
+		redactWorkspaceSecrets(&export)
 	}
 	b, err := json.MarshalIndent(export, "", "  ")
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// ImportFullWorkspace restores a backup produced by ExportFullWorkspace.
+func (a *App) ImportFullWorkspace(workspaceJSON string) (WorkspaceImportResult, error) {
+	if a.dbManager == nil {
+		return WorkspaceImportResult{}, fmt.Errorf("database not initialized")
+	}
+	var data FullWorkspaceExport
+	if err := json.Unmarshal([]byte(workspaceJSON), &data); err != nil {
+		return WorkspaceImportResult{}, fmt.Errorf("parse workspace backup: %w", err)
+	}
+	if data.Version == "" || data.Projects == nil {
+		return WorkspaceImportResult{}, fmt.Errorf("not a workspace backup file")
+	}
+	return a.dbManager.ImportWorkspace(data)
+}
+
+// SaveFileDialog prompts the user with a native system dialog to pick a save location on disk.
+func (a *App) SaveFileDialog(defaultFilename string, title string, filterDisplayName string, filterPattern string) (string, error) {
+	opts := wailsRuntime.SaveDialogOptions{
+		DefaultFilename: defaultFilename,
+		Title:           title,
+	}
+	if filterPattern != "" {
+		opts.Filters = []wailsRuntime.FileFilter{
+			{
+				DisplayName: filterDisplayName,
+				Pattern:     filterPattern,
+			},
+			{
+				DisplayName: "Tất cả các tệp (*.*)",
+				Pattern:     "*.*",
+			},
+		}
+	}
+	return wailsRuntime.SaveFileDialog(a.ctx, opts)
+}
+
+// SaveFileContent writes base64-encoded file data to the specified destination path.
+func (a *App) SaveFileContent(filePath string, base64Content string) error {
+	data, err := base64.StdEncoding.DecodeString(base64Content)
+	if err != nil {
+		return fmt.Errorf("failed to decode base64 file data: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+	return os.WriteFile(filePath, data, 0644)
+}
+
+// SaveFileWithDialog opens a native save dialog and saves base64 content to the chosen path.
+// Returns the saved file path, or empty string if user cancelled.
+func (a *App) SaveFileWithDialog(defaultFilename string, title string, filterDisplayName string, filterPattern string, base64Content string) (string, error) {
+	filePath, err := a.SaveFileDialog(defaultFilename, title, filterDisplayName, filterPattern)
+	if err != nil {
+		return "", err
+	}
+	if filePath == "" {
+		// User cancelled the file selection
+		return "", nil
+	}
+	if err := a.SaveFileContent(filePath, base64Content); err != nil {
+		return "", err
+	}
+	return filePath, nil
 }
 
 // ─── UI Automation Testing API (Wails-bound methods) ──────────────────────────
@@ -826,4 +956,64 @@ func (a *App) InstallPlaywrightBrowsers(browser string) error {
 		a.uiEngine = coreui.NewBrowserEngine()
 	}
 	return a.uiEngine.InstallBrowsers(coreui.BrowserType(browser))
+}
+
+// ─── Database – Activity History ──────────────────────────────────────────────
+
+func (a *App) GetActivityHistoryFromDB() ([]DBActivityHistory, error) {
+	if a.dbManager == nil {
+		return nil, nil
+	}
+	return a.dbManager.GetActivityHistory(100)
+}
+
+func (a *App) SaveActivityHistoryToDB(item DBActivityHistory) error {
+	if a.dbManager == nil {
+		return nil
+	}
+	return a.dbManager.SaveActivityHistory(item)
+}
+
+func (a *App) DeleteActivityHistoryFromDB(id string) error {
+	if a.dbManager == nil {
+		return nil
+	}
+	return a.dbManager.DeleteActivityHistory(id)
+}
+
+func (a *App) ClearActivityHistoryInDB() error {
+	if a.dbManager == nil {
+		return nil
+	}
+	return a.dbManager.ClearActivityHistory()
+}
+
+// ─── Database – App Settings & Workspace Session ─────────────────────────────
+
+func (a *App) GetWorkspaceSessionFromDB() (DBWorkspaceSession, error) {
+	if a.dbManager == nil {
+		return DBWorkspaceSession{}, nil
+	}
+	return a.dbManager.GetWorkspaceSession()
+}
+
+func (a *App) SaveWorkspaceSessionToDB(session DBWorkspaceSession) error {
+	if a.dbManager == nil {
+		return nil
+	}
+	return a.dbManager.SaveWorkspaceSession(session)
+}
+
+func (a *App) GetAppSetting(key string) (string, error) {
+	if a.dbManager == nil {
+		return "", nil
+	}
+	return a.dbManager.GetAppSetting(key)
+}
+
+func (a *App) SetAppSetting(key, value string) error {
+	if a.dbManager == nil {
+		return nil
+	}
+	return a.dbManager.SetAppSetting(key, value)
 }

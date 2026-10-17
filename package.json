@@ -1,6 +1,6 @@
 {
   "name": "Internal Tool API",
-  "version": "2.6.0",
+  "version": "3.0.0",
   "description": "Cross-platform Internal API Client with Stress Testing & SQLite persistence",
   "private": true,
   "scripts": {
@@ -14,7 +14,10 @@
     "bump:minor": "node scripts/bump-version.js minor",
     "bump:major": "node scripts/bump-version.js major",
     "bump": "node scripts/bump-version.js",
-    "release": "node scripts/bump-version.js patch --build"
+    "release": "node scripts/bump-version.js patch --build",
+    "docker:build:win": "docker compose run --rm build-windows",
+    "docker:build:linux": "docker compose run --rm build-linux",
+    "docker:shell": "docker compose run --rm shell"
   },
   "keywords": [
     "wails",

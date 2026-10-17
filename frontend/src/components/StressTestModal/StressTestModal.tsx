@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { EventsOn, EventsOff } from '../../../wailsjs/runtime/runtime';
 import useEscapeKey from '../../hooks/useEscapeKey';
+import { exportToHtml } from '../../utils/exportHelper';
 
 interface StressTestModalProps {
   isOpen: boolean;
@@ -58,12 +59,17 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
   if (!isOpen) return null;
 
   const res = stressResult as any;
-  const successRate = res && res.totalRequests > 0
-    ? ((res.successCount / res.totalRequests) * 100).toFixed(1)
+  // Requests interrupted by the end of the test (abortedRequests) never got a
+  // response, so they are neither successes nor failures.
+  const completedRequests = res ? (res.successCount || 0) + (res.failureCount || 0) : 0;
+  const successRate = completedRequests > 0
+    ? ((res.successCount / completedRequests) * 100).toFixed(1)
     : '0';
+  const escapeHtml = (value: string) =>
+    value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 
   // Export HTML Report Function
-  const handleExportHtmlReport = () => {
+  const handleExportHtmlReport = async () => {
     if (!res) return;
     const reportHtml = `<!DOCTYPE html>
 <html lang="vi">
@@ -91,7 +97,7 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
     <h1>⚡ Báo Cáo Kiểm Thử Hiệu Năng & Tải (Stress Test Report)</h1>
     <p style="color: #94a3b8;">Thời gian tạo: ${new Date().toLocaleString()} | Sinh bởi <strong>API Tester Pro v2.0</strong></p>
     <div style="background: #0f172a; padding: 12px 16px; border-radius: 6px; font-family: monospace; color: #38bdf8; word-break: break-all;">
-      [${activeTab?.method || 'GET'}] ${activeTab?.baseUrl || ''}${activeTab?.usePort && activeTab?.port ? ':' + activeTab.port : ''}${activeTab?.apiPath || ''}
+      [${escapeHtml(activeTab?.method || 'GET')}] ${escapeHtml(`${activeTab?.baseUrl || ''}${activeTab?.usePort && activeTab?.port ? ':' + activeTab.port : ''}${activeTab?.apiPath || ''}`)}
     </div>
 
     <div class="grid">
@@ -110,6 +116,10 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
       <div class="metric">
         <div class="label">Tổng Requests</div>
         <div class="val" style="color: #e2e8f0;">${res.totalRequests || 0}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Bị ngắt khi kết thúc</div>
+        <div class="val" style="color: #94a3b8;">${res.abortedRequests || 0}</div>
       </div>
     </div>
 
@@ -135,13 +145,8 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
 </body>
 </html>`;
 
-    const blob = new Blob([reportHtml], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `StressTest_Report_${new Date().toISOString().slice(0,19).replace(/[:T]/g, '-')}.html`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const filename = `StressTest_Report_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.html`;
+    await exportToHtml(reportHtml, filename);
   };
 
   return (
@@ -157,25 +162,25 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
       padding: '20px'
     }}>
       <div style={{
-        background: '#111827',
-        border: '1px solid #1f293d',
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-card)',
         borderRadius: '12px',
         width: '840px',
         maxWidth: '100%',
         maxHeight: '92vh',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)',
+        boxShadow: 'var(--shadow-dropdown)',
         overflow: 'hidden'
       }}>
         {/* Header */}
         <div style={{
           padding: '16px 20px',
-          borderBottom: '1px solid #1f293d',
+          borderBottom: '1px solid var(--border-card)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          background: 'linear-gradient(90deg, #1f142b 0%, #111827 100%)'
+          background: 'var(--bg-surface-secondary)'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '22px' }}>⚡</span>
@@ -213,8 +218,8 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
         {activeTab && (
           <div style={{
             padding: '10px 20px',
-            background: '#0d131f',
-            borderBottom: '1px solid #1f293d',
+            background: 'var(--bg-surface-secondary)',
+            borderBottom: '1px solid var(--border-card)',
             display: 'flex',
             alignItems: 'center',
             gap: '10px',
@@ -244,10 +249,10 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
             gap: '12px',
-            background: '#0d131f',
+            background: 'var(--bg-surface-secondary)',
             padding: '14px',
             borderRadius: '8px',
-            border: '1px solid #1f293d'
+            border: '1px solid var(--border-card)'
           }}>
             <div>
               <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>
@@ -447,62 +452,62 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
 
               {/* Top 3 Summary Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
-                <div style={{ background: '#0d131f', border: '1px solid #1f293d', borderRadius: '8px', padding: '12px' }}>
-                  <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500 }}>Throughput (RPS)</span>
+                <div style={{ background: 'var(--bg-surface-secondary)', border: '1px solid var(--border-card)', borderRadius: '8px', padding: '12px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>Throughput (RPS)</span>
                   <div style={{ fontSize: '22px', fontWeight: 700, color: '#facc15', fontFamily: 'var(--font-mono)' }}>
                     {(res.rps || 0).toFixed(1)}
                   </div>
-                  <span style={{ fontSize: '10px', color: '#64748b' }}>Requests per second</span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>Requests per second</span>
                 </div>
 
-                <div style={{ background: '#0d131f', border: '1px solid #1f293d', borderRadius: '8px', padding: '12px' }}>
-                  <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500 }}>Độ trễ TB (Avg Latency)</span>
-                  <div style={{ fontSize: '22px', fontWeight: 700, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
+                <div style={{ background: 'var(--bg-surface-secondary)', border: '1px solid var(--border-card)', borderRadius: '8px', padding: '12px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>Độ trễ TB (Avg Latency)</span>
+                  <div style={{ fontSize: '22px', fontWeight: 700, color: 'var(--color-primary)', fontFamily: 'var(--font-mono)' }}>
                     {res.averageTimeMs || 0} <span style={{ fontSize: '12px' }}>ms</span>
                   </div>
-                  <span style={{ fontSize: '10px', color: '#64748b' }}>Min: {res.minTimeMs || 0}ms / Max: {res.maxTimeMs || 0}ms</span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>Min: {res.minTimeMs || 0}ms / Max: {res.maxTimeMs || 0}ms</span>
                 </div>
 
-                <div style={{ background: '#0d131f', border: '1px solid #1f293d', borderRadius: '8px', padding: '12px' }}>
-                  <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500 }}>Tỷ lệ thành công</span>
+                <div style={{ background: 'var(--bg-surface-secondary)', border: '1px solid var(--border-card)', borderRadius: '8px', padding: '12px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>Tỷ lệ thành công</span>
                   <div style={{ fontSize: '22px', fontWeight: 700, color: '#10b981', fontFamily: 'var(--font-mono)' }}>
                     {successRate}%
                   </div>
-                  <span style={{ fontSize: '10px', color: '#64748b' }}>{res.successCount || 0} / {res.totalRequests || 0} reqs</span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{res.successCount || 0} / {res.totalRequests || 0} reqs</span>
                 </div>
               </div>
 
               {/* Percentiles Latency Breakdown */}
               <div style={{
-                background: '#0d131f',
-                border: '1px solid #1f293d',
+                background: 'var(--bg-surface-secondary)',
+                border: '1px solid var(--border-card)',
                 borderRadius: '8px',
                 padding: '12px 16px'
               }}>
-                <div style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', marginBottom: '8px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px' }}>
                   ⏱️ Bảng Phân Bổ Độ Trễ Phân Vị (Latency Percentiles):
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-                  <div style={{ background: '#111827', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>p50 (Median)</div>
-                    <div style={{ fontSize: '16px', fontWeight: 700, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ background: 'var(--bg-card)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>p50 (Median)</div>
+                    <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--color-primary)', fontFamily: 'var(--font-mono)' }}>
                       {res.p50Ms || 0} ms
                     </div>
                   </div>
-                  <div style={{ background: '#111827', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>p90</div>
+                  <div style={{ background: 'var(--bg-card)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>p90</div>
                     <div style={{ fontSize: '16px', fontWeight: 700, color: '#60a5fa', fontFamily: 'var(--font-mono)' }}>
                       {res.p90Ms || 0} ms
                     </div>
                   </div>
-                  <div style={{ background: '#111827', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>p95 (SLA)</div>
+                  <div style={{ background: 'var(--bg-card)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>p95 (SLA)</div>
                     <div style={{ fontSize: '16px', fontWeight: 700, color: '#f59e0b', fontFamily: 'var(--font-mono)' }}>
                       {res.p95Ms || 0} ms
                     </div>
                   </div>
-                  <div style={{ background: '#111827', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>p99 (Outliers)</div>
+                  <div style={{ background: 'var(--bg-card)', padding: '8px', borderRadius: '6px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>p99 (Outliers)</div>
                     <div style={{ fontSize: '16px', fontWeight: 700, color: '#ef4444', fontFamily: 'var(--font-mono)' }}>
                       {res.p99Ms || 0} ms
                     </div>
@@ -516,18 +521,19 @@ export default function StressTestModal({ isOpen, onClose }: StressTestModalProp
         {/* Footer */}
         <div style={{
           padding: '12px 20px',
-          borderTop: '1px solid #1f293d',
+          borderTop: '1px solid var(--border-card)',
           display: 'flex',
           justifyContent: 'flex-end',
-          background: '#0d131f'
+          background: 'var(--bg-surface-secondary)'
         }}>
           <button
             onClick={onClose}
             style={{
               padding: '8px 20px',
               borderRadius: '6px',
-              background: '#1e293d',
-              color: '#f1f5f9',
+              background: 'var(--bg-card)',
+              color: 'var(--text-main)',
+              border: '1px solid var(--border-subtle)',
               fontWeight: 600,
               fontSize: '13px',
               cursor: 'pointer'

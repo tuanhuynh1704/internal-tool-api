@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -8,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -15,15 +18,20 @@ import (
 // Default is a cross-platform polling implementation.
 var waitForProcessExitFn = waitForProcessExitPolling
 
+// healthWindow is how long the freshly installed app must keep running before
+// the backup of the previous version is discarded.
+const healthWindow = 8 * time.Second
+
 func main() {
 	pid := flag.Int("pid", 0, "PID of the application to wait for")
 	source := flag.String("source", "", "Path to the downloaded new binary")
 	target := flag.String("target", "", "Path to the current application executable")
 	newTarget := flag.String("new-target", "", "Path to the new renamed executable file (optional, defaults to target)")
+	expectedSHA := flag.String("sha256", "", "Expected SHA-256 of the downloaded binary")
 	flag.Parse()
 
-	if *pid == 0 || *source == "" || *target == "" {
-		log.Fatal("[updater] missing required flags: --pid, --source, --target")
+	if *pid == 0 || *source == "" || *target == "" || *expectedSHA == "" {
+		log.Fatal("[updater] missing required flags: --pid, --source, --target, --sha256")
 	}
 
 	finalTarget := *target
@@ -35,7 +43,9 @@ func main() {
 
 	// ── Step 1: Wait for the application to exit ────────────────────────────
 	if err := waitForProcessExitFn(*pid, 60*time.Second); err != nil {
-		logf("[updater] WARNING: %v — proceeding anyway", err)
+		// The executable is still locked; replacing it now would fail half-way.
+		logf("[updater] ERROR: %v — aborting update", err)
+		os.Exit(1)
 	}
 	logf("[updater] app process has exited")
 
@@ -44,63 +54,84 @@ func main() {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// ── Step 2: Backup old binary ────────────────────────────────────────────
-	backup := *target + ".bak"
-	logf("[updater] backing up %s → %s", *target, backup)
-	if err := copyFile(*target, backup); err != nil {
-		logf("[updater] ERROR: could not backup old binary: %v", err)
+	// ── Step 2: Verify the downloaded binary right before installing ────────
+	if err := verifySHA256(*source, *expectedSHA); err != nil {
+		logf("[updater] ERROR: %v — refusing to install", err)
+		_ = os.Remove(*source)
 		os.Exit(1)
 	}
 
-	// ── Step 3: Replace / Write new binary ───────────────────────────────────
-	logf("[updater] installing new binary to %s (from %s)", finalTarget, *source)
-	if err := replaceFile(*source, finalTarget); err != nil {
-		logf("[updater] ERROR: install failed: %v — rolling back", err)
-		if finalTarget != *target {
-			_ = os.Remove(finalTarget)
-		}
-		rollback(backup, *target)
+	// ── Step 3: Stage the new binary next to the target ──────────────────────
+	staged := finalTarget + ".new"
+	if err := copyFile(*source, staged); err != nil {
+		logf("[updater] ERROR: could not stage new binary: %v", err)
+		_ = os.Remove(staged)
 		os.Exit(1)
 	}
-
-	// ── Step 4: Verify new binary ────────────────────────────────────────────
-	fi, err := os.Stat(finalTarget)
-	if err != nil || fi.Size() == 0 {
-		logf("[updater] ERROR: target file invalid after install — rolling back")
-		if finalTarget != *target {
-			_ = os.Remove(finalTarget)
-		}
-		rollback(backup, *target)
-		os.Exit(1)
-	}
-
-	// ── Step 5: Set executable permission (Linux/macOS) ──────────────────────
 	if runtime.GOOS != "windows" {
-		if err = os.Chmod(finalTarget, 0o755); err != nil {
-			logf("[updater] WARNING: chmod %s: %v", finalTarget, err)
+		if err := os.Chmod(staged, 0o755); err != nil {
+			logf("[updater] WARNING: chmod %s: %v", staged, err)
 		}
 	}
 
-	// ── Step 6: Restart application ──────────────────────────────────────────
+	// ── Step 4: Swap by rename (atomic per file) ─────────────────────────────
+	backup := *target + ".bak"
+	_ = os.Remove(backup)
+	if err := renameWithRetry(*target, backup); err != nil {
+		logf("[updater] ERROR: could not move old binary aside: %v", err)
+		_ = os.Remove(staged)
+		os.Exit(1)
+	}
+	if err := renameWithRetry(staged, finalTarget); err != nil {
+		logf("[updater] ERROR: install failed: %v — rolling back", err)
+		_ = os.Remove(staged)
+		rollback(backup, *target, finalTarget)
+		os.Exit(1)
+	}
+
+	// ── Step 5: Restart and confirm the new version stays up ─────────────────
 	logf("[updater] launching updated app: %s", finalTarget)
 	cmd := exec.Command(finalTarget)
-	if err = cmd.Start(); err != nil {
+	if err := cmd.Start(); err != nil {
 		logf("[updater] ERROR: could not start new app: %v — rolling back", err)
-		if finalTarget != *target {
-			_ = os.Remove(finalTarget)
-		}
-		rollback(backup, *target)
+		rollback(backup, *target, finalTarget)
+		restartOld(*target)
 		os.Exit(1)
 	}
 	logf("[updater] new app started (PID=%d)", cmd.Process.Pid)
 
-	// ── Step 7: Cleanup ──────────────────────────────────────────────────────
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case err := <-exited:
+		logf("[updater] ERROR: new app exited within %s (%v) — rolling back", healthWindow, err)
+		rollback(backup, *target, finalTarget)
+		restartOld(*target)
+		os.Exit(1)
+	case <-time.After(healthWindow):
+	}
+
+	// ── Step 6: Cleanup ──────────────────────────────────────────────────────
 	_ = removeFileWithRetry(backup)
 	_ = removeFileWithRetry(*source)
-	// NOTE: Old executable files are intentionally NOT deleted when installing a new version,
-	// preserving user files and previous installations.
-
 	logf("[updater] cleanup done — exiting")
+}
+
+func verifySHA256(path, expected string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open downloaded binary: %w", err)
+	}
+	defer file.Close()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return fmt.Errorf("hash downloaded binary: %w", err)
+	}
+	actual := hex.EncodeToString(hasher.Sum(nil))
+	if want := strings.ToLower(strings.TrimSpace(expected)); actual != want {
+		return fmt.Errorf("SHA-256 mismatch: expected %s, got %s", want, actual)
+	}
+	return nil
 }
 
 // waitForProcessExitPolling is the default cross-platform implementation.
@@ -123,12 +154,6 @@ func waitForProcessExitPolling(pid int, timeout time.Duration) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return fmt.Errorf("timed out waiting for PID %d to exit after %s", pid, timeout)
-}
-
-// replaceFile copies src to dst.
-// On Windows this is safe because the old process has fully exited.
-func replaceFile(src, dst string) error {
-	return copyFile(src, dst)
 }
 
 // copyFile copies src to dst using streaming I/O with retries for temporary file locks.
@@ -163,14 +188,38 @@ func copyFile(src, dst string) error {
 	return fmt.Errorf("failed after 10 attempts: %w", lastErr)
 }
 
-// rollback replaces target with the backup file. Best-effort.
-func rollback(backup, target string) {
+func renameWithRetry(src, dst string) error {
+	var lastErr error
+	for attempt := 1; attempt <= 15; attempt++ {
+		if err := os.Rename(src, dst); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return lastErr
+}
+
+// rollback restores the previous binary from its backup. Best-effort.
+func rollback(backup, target, finalTarget string) {
 	logf("[updater] rolling back: %s → %s", backup, target)
-	if err := copyFile(backup, target); err != nil {
+	if finalTarget != target {
+		_ = os.Remove(finalTarget)
+	} else {
+		_ = os.Remove(target)
+	}
+	if err := renameWithRetry(backup, target); err != nil {
 		logf("[updater] CRITICAL: rollback failed: %v — app may be broken!", err)
 		return
 	}
 	logf("[updater] rollback successful")
+}
+
+func restartOld(target string) {
+	if err := exec.Command(target).Start(); err != nil {
+		logf("[updater] could not restart previous version: %v", err)
+	}
 }
 
 func logf(format string, args ...any) {

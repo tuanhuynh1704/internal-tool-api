@@ -1,36 +1,18 @@
-﻿# =============================================================================
-# docker-compose.yml — Internal API Client (API Tester Pro)
-# Wrapper tiện lợi để chạy build trong Docker
+# =============================================================================
+# docker-compose.yml — Internal Tool API (API Tester Pro)
+# =============================================================================
+# Tiện ích điều phối môi trường build trong container.
+# Giúp bạn đóng gói ứng dụng mà không cần cài Go, Node.js, Wails CLI hay GTK.
 #
 # Cách dùng:
-#   docker compose run --rm build-linux    → Build cho Linux
-#   docker compose run --rm build-windows  → Build ra file .exe cho Windows
-#   docker compose run --rm shell          → Vào shell để debug
-#
-# Output sẽ được copy ra thư mục ./dist/ trên máy host sau khi build.
-# (Không dùng bind-mount trực tiếp vào build/bin để tránh lỗi unlinkat)
+#   docker compose run --rm build-windows  # Build ra file .exe cho Windows -> ./dist/
+#   docker compose run --rm build-linux    # Build ra binary cho Linux       -> ./dist/
+#   docker compose run --rm shell          # Mở terminal container để kiểm tra/debug
 # =============================================================================
 
 services:
 
-  # ── Build cho Linux (amd64) ─────────────────────────────────────────────────
-  build-linux:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: builder
-      args:
-        TARGET: linux
-    volumes:
-      # Mount thư mục output ra ./dist/ trên host
-      - ./dist:/output
-    command: >
-      sh -c "wails build -platform linux/amd64 &&
-             mkdir -p /output &&
-             cp -r /app/build/bin/. /output/ &&
-             echo '✅ Build Linux xong! Output: ./dist/'"
-
-  # ── Build cho Windows (cross-compile ra .exe) ────────────────────────────────
+  # ── Build cho Windows (Cross-compile ra Internal Tool API.exe + updater.exe) ──
   build-windows:
     build:
       context: .
@@ -39,24 +21,43 @@ services:
       args:
         TARGET: windows
     volumes:
-      # Mount thư mục output ra ./dist/ trên host
       - ./dist:/output
-    environment:
-      - CGO_ENABLED=0
-      - GOOS=windows
-      - GOARCH=amd64
     command: >
-      sh -c "wails build -platform windows/amd64 -s &&
-             mkdir -p /output &&
-             cp -r /app/build/bin/. /output/ &&
-             echo '✅ Build Windows xong! Output: ./dist/internal-api-client-v1.3.3.exe'"
+      sh -c "mkdir -p /output &&
+             cp -r /export/. /output/ &&
+             echo '---------------------------------------------------' &&
+             echo '✅ Build Windows thành công!' &&
+             echo '📁 Các file nhị phân đã được xuất ra thư mục ./dist/:' &&
+             ls -lh /output &&
+             echo '---------------------------------------------------'"
 
-  # ── Shell để debug môi trường build ─────────────────────────────────────────
+  # ── Build cho Linux (ELF binary + updater) ───────────────────────────────────
+  build-linux:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+      args:
+        TARGET: linux
+    volumes:
+      - ./dist:/output
+    command: >
+      sh -c "mkdir -p /output &&
+             cp -r /export/. /output/ &&
+             echo '---------------------------------------------------' &&
+             echo '✅ Build Linux thành công!' &&
+             echo '📁 Các file nhị phân đã được xuất ra thư mục ./dist/:' &&
+             ls -lh /output &&
+             echo '---------------------------------------------------'"
+
+  # ── Shell Container để debug hoặc chạy lệnh thủ công ─────────────────────────
   shell:
     build:
       context: .
       dockerfile: Dockerfile
       target: builder
+    volumes:
+      - .:/app
     entrypoint: /bin/bash
     stdin_open: true
     tty: true

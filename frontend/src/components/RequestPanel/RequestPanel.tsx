@@ -1,19 +1,23 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useApp, HeaderPair, ParamPair, KeyValueRow } from '../../context/AppContext';
+import { useTheme } from '../../context/ThemeContext';
 import { Editor } from '@monaco-editor/react';
 import { parseCurl, generateCodeSnippet, generateCurlSnippet } from '../../utils/curlParser';
 import { AssertionRule } from '../../utils/excelScenarioHelper';
 import useEscapeKey from '../../hooks/useEscapeKey';
+import { alertDialog, showToast } from '../common/Dialog';
 
 interface RequestPanelProps {
   onOpenStressModal?: () => void;
   onOpenEnvModal?: () => void;
   onOpenAutomationModal?: () => void;
+  onOpenUITestModal?: () => void;
   onOpenMockModal?: () => void;
   onOpenUserGuide?: () => void;
 }
 
-export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpenAutomationModal, onOpenMockModal, onOpenUserGuide }: RequestPanelProps) {
+export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpenAutomationModal, onOpenUITestModal, onOpenMockModal, onOpenUserGuide }: RequestPanelProps) {
+  const { theme } = useTheme();
   const { 
     activeTab, updateActiveTab, loading, handleSendRequest,
     environments, activeEnvId, setActiveEnvId,
@@ -179,12 +183,17 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
   // ==========================================
   // JSON FORMATTER
   // ==========================================
-  const handleFormatJson = () => {
+  const handleFormatJson = async () => {
     try {
       const parsed = JSON.parse(reqBody);
       updateActiveTab({ reqBody: JSON.stringify(parsed, null, 2) });
     } catch {
-      alert("Nội dung Body không phải định dạng JSON hợp lệ để format!");
+      await alertDialog({
+        title: "Cú pháp JSON không hợp lệ",
+        message: "Nội dung Body không phải định dạng JSON hợp lệ để format!",
+        variant: "warning",
+        confirmText: "Đã hiểu"
+      });
     }
   };
 
@@ -269,7 +278,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
   // ==========================================
   // IMPORT cURL HANDLER
   // ==========================================
-  const handleImportCurlSubmit = () => {
+  const handleImportCurlSubmit = async () => {
     if (!curlInputText.trim()) return;
     const parsed = parseCurl(curlInputText.trim());
     if (parsed) {
@@ -283,6 +292,8 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
         paramsList: parsed.params,
         reqBody: parsed.body,
         bodyType: (parsed.bodyType as any) || 'json',
+        urlEncodedList: parsed.urlEncoded,
+        formDataList: parsed.formData,
         authType: (parsed.authType as any) || 'none',
         authToken: parsed.authToken,
         authConfig: parsed.authConfig || {}
@@ -290,7 +301,12 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
       setIsImportCurlOpen(false);
       setCurlInputText('');
     } else {
-      alert("Không thể phân tích cú pháp lệnh cURL này. Vui lòng kiểm tra lại định dạng cURL.");
+      await alertDialog({
+        title: "Không thể phân tích cURL",
+        message: "Không thể phân tích cú pháp lệnh cURL này. Vui lòng kiểm tra lại định dạng cURL.",
+        variant: "warning",
+        confirmText: "Đã hiểu"
+      });
     }
   };
 
@@ -310,7 +326,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
   const handleQuickCopyCurl = () => {
     const curl = generateCurlSnippet(method, fullUrl, mappedHeaders, reqBody);
     navigator.clipboard.writeText(curl);
-    alert("✓ Đã sao chép lệnh cURL vào bộ nhớ tạm!");
+    showToast("✓ Đã sao chép lệnh cURL vào bộ nhớ tạm!");
   };
 
   const enabledParamsCount = paramsList.filter(p => p.enabled && p.key).length;
@@ -607,6 +623,37 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                     <div>
                       <div style={{ fontSize: '12px', fontWeight: 600, color: '#38bdf8' }}>Auto Test Studio</div>
                       <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>Chạy kịch bản tự động theo luồng</div>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenUITestModal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsToolsDropdownOpen(false);
+                      onOpenUITestModal();
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '8px',
+                      padding: '8px 10px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderRadius: '6px',
+                      color: 'var(--text-main)',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      transition: 'background 0.12s ease'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(168, 85, 247, 0.12)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span style={{ fontSize: '16px', lineHeight: 1 }}>🖥️</span>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#c084fc' }}>UI Automation Studio</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>Tự động hóa trình duyệt web Playwright</div>
                     </div>
                   </button>
                 )}
@@ -977,39 +1024,66 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '3px 8px',
-        background: 'rgba(10, 14, 23, 0.6)',
+        padding: '5px 12px',
+        background: 'var(--bg-card)',
         borderRadius: '6px',
-        fontSize: '11px',
+        fontSize: '11.5px',
         fontFamily: 'var(--font-mono)',
-        color: 'var(--text-dim)',
-        border: '1px solid rgba(255, 255, 255, 0.03)',
+        color: 'var(--text-main)',
+        border: '1px solid var(--border-card)',
+        boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.04)',
         marginTop: '-2px'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          <span style={{ color: 'var(--color-primary)', fontWeight: 600, fontSize: '10px', textTransform: 'uppercase' }}>Resolved URL:</span>
-          <span style={{ color: 'var(--text-muted)' }} title={fullUrl}>{fullUrl || '(chưa có URL)'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+          <span style={{ 
+            color: 'var(--color-primary)', 
+            fontWeight: 800, 
+            fontSize: '10px', 
+            textTransform: 'uppercase', 
+            letterSpacing: '0.5px',
+            background: 'var(--color-primary-bg)',
+            padding: '2px 7px',
+            borderRadius: '4px',
+            flexShrink: 0,
+            border: '1px solid rgba(56, 189, 248, 0.25)'
+          }}>
+            RESOLVED URL
+          </span>
+          <span style={{ color: 'var(--text-main)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }} title={fullUrl}>
+            {fullUrl || '(chưa có URL)'}
+          </span>
         </div>
         <button
           type="button"
           onClick={() => {
             navigator.clipboard.writeText(fullUrl);
-            alert("✓ Đã sao chép URL thực thi hoàn chỉnh!");
+            showToast("✓ Đã sao chép URL thực thi hoàn chỉnh!");
           }}
           title="Sao chép toàn bộ URL hoàn chỉnh đã giải mã biến môi trường"
           style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--text-dim)',
+            background: 'var(--bg-active)',
+            border: '1px solid var(--border-subtle)',
+            color: 'var(--text-muted)',
             cursor: 'pointer',
-            fontSize: '10px',
+            fontSize: '10.5px',
             display: 'flex',
             alignItems: 'center',
-            gap: '3px',
-            flexShrink: 0
+            gap: '4px',
+            flexShrink: 0,
+            fontWeight: 600,
+            padding: '3px 8px',
+            borderRadius: '4px',
+            marginLeft: '8px',
+            transition: 'all 0.15s ease'
           }}
-          onMouseEnter={(e) => e.currentTarget.style.color = 'var(--color-primary)'}
-          onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-dim)'}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = 'var(--color-primary)';
+            e.currentTarget.style.borderColor = 'var(--color-primary)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = 'var(--text-muted)';
+            e.currentTarget.style.borderColor = 'var(--border-subtle)';
+          }}
         >
           <span>📋</span> Copy URL
         </button>
@@ -1210,7 +1284,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                           placeholder="Key"
                           value={row.key}
                           onChange={(e) => updateParamRow(row.id, 'key', e.target.value)}
-                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: '#f1f5f9' }}
+                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: 'var(--text-main)' }}
                         />
                       </td>
                       <td style={{ padding: '4px 8px' }}>
@@ -1219,7 +1293,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                           placeholder="Value hoặc {{var}}"
                           value={row.value}
                           onChange={(e) => updateParamRow(row.id, 'value', e.target.value)}
-                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: '#38bdf8', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
+                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: 'var(--color-primary)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
                         />
                       </td>
                       <td style={{ padding: '4px 8px' }}>
@@ -1228,7 +1302,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                           placeholder="Ghi chú..."
                           value={row.description || ''}
                           onChange={(e) => updateParamRow(row.id, 'description', e.target.value)}
-                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '12px' }}
+                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: 'var(--text-dim)', fontSize: '12px' }}
                         />
                       </td>
                       <td style={{ padding: '6px', textAlign: 'center' }}>
@@ -1321,7 +1395,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                           placeholder="e.g. Content-Type / Authorization"
                           value={row.key}
                           onChange={(e) => updateHeaderRow(row.id, 'key', e.target.value)}
-                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: '#f1f5f9' }}
+                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: 'var(--text-main)' }}
                         />
                       </td>
                       <td style={{ padding: '4px 8px' }}>
@@ -1330,7 +1404,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                           placeholder="e.g. application/json hoặc {{token}}"
                           value={row.value}
                           onChange={(e) => updateHeaderRow(row.id, 'value', e.target.value)}
-                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: '#38bdf8', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
+                          style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: 'var(--color-primary)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
                         />
                       </td>
                       <td style={{ padding: '6px', textAlign: 'center' }}>
@@ -1449,7 +1523,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                   height="160px"
                   defaultLanguage={bodyType === 'json' ? "json" : "plaintext"}
                   language={bodyType === 'json' ? "json" : "plaintext"}
-                  theme="vs-dark"
+                  theme={theme === 'light' ? 'vs-light' : 'vs-dark'}
                   value={reqBody}
                   onChange={(value) => updateActiveTab({ reqBody: value || '' })}
                   options={{ 
@@ -1509,7 +1583,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                               placeholder="Key"
                               value={row.key}
                               onChange={(e) => updateUrlEncodedRow(row.id, 'key', e.target.value)}
-                              style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: '#f1f5f9' }}
+                              style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: 'var(--text-main)' }}
                             />
                           </td>
                           <td style={{ padding: '4px 8px' }}>
@@ -1518,7 +1592,7 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                               placeholder="Value hoặc {{var}}"
                               value={row.value}
                               onChange={(e) => updateUrlEncodedRow(row.id, 'value', e.target.value)}
-                              style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: '#38bdf8', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
+                              style={{ width: '100%', padding: '4px 6px', background: 'transparent', border: 'none', color: 'var(--color-primary)', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
                             />
                           </td>
                           <td style={{ padding: '6px', textAlign: 'center' }}>
@@ -1948,26 +2022,26 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
           padding: '20px'
         }}>
           <div style={{
-            background: '#111827',
-            border: '1px solid #1f293d',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-card)',
             borderRadius: '10px',
             width: '650px',
             maxWidth: '100%',
             display: 'flex',
             flexDirection: 'column',
-            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)',
+            boxShadow: 'var(--shadow-dropdown)',
             overflow: 'hidden'
           }}>
-            <div style={{ padding: '14px 18px', borderBottom: '1px solid #1f293d', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d131f' }}>
+            <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border-card)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-surface-secondary)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '18px' }}>📥</span>
-                <span style={{ fontWeight: 700, fontSize: '14px', color: '#f1f5f9' }}>Import từ lệnh cURL</span>
+                <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-main)' }}>Import từ lệnh cURL</span>
               </div>
-              <button onClick={() => setIsImportCurlOpen(false)} style={{ background: 'transparent', color: '#94a3b8', fontSize: '16px' }}>✕</button>
+              <button onClick={() => setIsImportCurlOpen(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '16px' }}>✕</button>
             </div>
 
             <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <label style={{ fontSize: '12px', color: '#94a3b8' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                 Dán câu lệnh <code>curl ...</code> từ trình duyệt (DevTools ➔ Copy as cURL) hoặc tài liệu API:
               </label>
               <textarea
@@ -1983,25 +2057,25 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                   width: '100%',
                   fontFamily: 'var(--font-mono)',
                   fontSize: '12px',
-                  background: '#0a0e17',
-                  border: '1px solid #1f293d',
+                  background: 'var(--bg-input)',
+                  border: '1px solid var(--border-card)',
                   borderRadius: '6px',
                   padding: '10px',
-                  color: '#38bdf8'
+                  color: 'var(--text-main)'
                 }}
               />
             </div>
 
-            <div style={{ padding: '12px 18px', borderTop: '1px solid #1f293d', display: 'flex', justifyContent: 'flex-end', gap: '8px', background: '#0d131f' }}>
+            <div style={{ padding: '12px 18px', borderTop: '1px solid var(--border-card)', display: 'flex', justifyContent: 'flex-end', gap: '8px', background: 'var(--bg-surface-secondary)' }}>
               <button
                 onClick={() => setIsImportCurlOpen(false)}
-                style={{ padding: '6px 14px', borderRadius: '6px', background: 'transparent', color: '#94a3b8', fontSize: '12px' }}
+                style={{ padding: '6px 14px', borderRadius: '6px', background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '12px' }}
               >
                 Hủy
               </button>
               <button
                 onClick={handleImportCurlSubmit}
-                style={{ padding: '6px 16px', borderRadius: '6px', background: 'var(--color-primary)', color: '#0b0f17', fontWeight: 700, fontSize: '12px' }}
+                style={{ padding: '6px 16px', borderRadius: '6px', background: 'var(--color-primary)', color: '#ffffff', fontWeight: 700, fontSize: '12px' }}
               >
                 Nhập Ngay ⚡
               </button>
@@ -2026,26 +2100,26 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
           padding: '20px'
         }}>
           <div style={{
-            background: '#111827',
-            border: '1px solid #1f293d',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-card)',
             borderRadius: '10px',
             width: '720px',
             maxWidth: '100%',
             display: 'flex',
             flexDirection: 'column',
-            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)',
+            boxShadow: 'var(--shadow-dropdown)',
             overflow: 'hidden'
           }}>
-            <div style={{ padding: '14px 18px', borderBottom: '1px solid #1f293d', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d131f' }}>
+            <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border-card)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-surface-secondary)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '18px' }}>💻</span>
-                <span style={{ fontWeight: 700, fontSize: '14px', color: '#f1f5f9' }}>Code Snippets Generator</span>
+                <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-main)' }}>Code Snippets Generator</span>
               </div>
-              <button onClick={() => setIsCodeModalOpen(false)} style={{ background: 'transparent', color: '#94a3b8', fontSize: '16px' }}>✕</button>
+              <button onClick={() => setIsCodeModalOpen(false)} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '16px' }}>✕</button>
             </div>
 
             {/* Language Selector */}
-            <div style={{ display: 'flex', gap: '6px', padding: '10px 16px', borderBottom: '1px solid #1f293d', background: '#0a0e17' }}>
+            <div style={{ display: 'flex', gap: '6px', padding: '10px 16px', borderBottom: '1px solid var(--border-card)', background: 'var(--bg-surface-secondary)' }}>
               {(['curl', 'fetch', 'axios', 'python', 'go', 'nodejs'] as const).map(lang => (
                 <button
                   key={lang}
@@ -2055,8 +2129,9 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                     borderRadius: '4px',
                     fontSize: '11px',
                     fontWeight: selectedLang === lang ? 700 : 400,
-                    background: selectedLang === lang ? 'var(--color-primary)' : '#1e293b',
-                    color: selectedLang === lang ? '#0b0f17' : '#94a3b8',
+                    background: selectedLang === lang ? 'var(--color-primary)' : 'var(--bg-card)',
+                    color: selectedLang === lang ? '#ffffff' : 'var(--text-muted)',
+                    border: '1px solid var(--border-subtle)',
                     textTransform: 'uppercase'
                   }}
                 >
@@ -2068,15 +2143,15 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
             {/* Code View */}
             <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '11px', color: '#64748b' }}>Mã nguồn thực thi độc lập:</span>
+                <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Mã nguồn thực thi độc lập:</span>
                 <button
                   onClick={handleCopySnippet}
                   style={{
                     padding: '4px 10px',
                     borderRadius: '4px',
-                    background: copiedSnippet ? '#10b981' : '#1e293b',
-                    color: copiedSnippet ? '#0b0f17' : '#38bdf8',
-                    border: '1px solid #334155',
+                    background: copiedSnippet ? '#10b981' : 'var(--bg-card)',
+                    color: copiedSnippet ? '#ffffff' : 'var(--color-primary)',
+                    border: '1px solid var(--border-card)',
                     fontSize: '11px',
                     fontWeight: 600
                   }}
@@ -2085,11 +2160,11 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
                 </button>
               </div>
 
-              <div style={{ border: '1px solid #1f293d', borderRadius: '6px', overflow: 'hidden' }}>
+              <div style={{ border: '1px solid var(--border-card)', borderRadius: '6px', overflow: 'hidden' }}>
                 <Editor
                   height="260px"
                   language={selectedLang === 'python' ? 'python' : (selectedLang === 'go' ? 'go' : (selectedLang === 'curl' ? 'shell' : 'javascript'))}
-                  theme="vs-dark"
+                  theme={theme === 'light' ? 'vs-light' : 'vs-dark'}
                   value={codeSnippet}
                   options={{
                     readOnly: true,
@@ -2103,10 +2178,10 @@ export default function RequestPanel({ onOpenStressModal, onOpenEnvModal, onOpen
               </div>
             </div>
 
-            <div style={{ padding: '10px 16px', borderTop: '1px solid #1f293d', display: 'flex', justifyContent: 'flex-end', background: '#0d131f' }}>
+            <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border-card)', display: 'flex', justifyContent: 'flex-end', background: 'var(--bg-surface-secondary)' }}>
               <button
                 onClick={() => setIsCodeModalOpen(false)}
-                style={{ padding: '6px 14px', borderRadius: '6px', background: '#1e293b', color: '#f1f5f9', fontSize: '12px' }}
+                style={{ padding: '6px 14px', borderRadius: '6px', background: 'var(--bg-card)', color: 'var(--text-main)', border: '1px solid var(--border-subtle)', fontSize: '12px' }}
               >
                 Đóng
               </button>

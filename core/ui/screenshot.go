@@ -28,8 +28,15 @@ func NewScreenshotManager() *ScreenshotManager {
 }
 
 // GenerateScreenshotPath generates a unique file path for a failed step screenshot
+// artifactTimestamp is unique per call: Go only treats ".000" (not "_000") as
+// milliseconds, and two failures within the same second must not share a file.
+func artifactTimestamp() string {
+	now := time.Now()
+	return fmt.Sprintf("%s_%09d", now.Format("20060102_150405"), now.Nanosecond())
+}
+
 func (sm *ScreenshotManager) GenerateScreenshotPath(scenarioID, stepID string) string {
-	timestamp := time.Now().Format("20060102_150405_000")
+	timestamp := artifactTimestamp()
 	safeScenarioID := sanitizeFileName(scenarioID)
 	safeStepID := sanitizeFileName(stepID)
 	fileName := fmt.Sprintf("fail_%s_%s_%s.png", safeScenarioID, safeStepID, timestamp)
@@ -37,7 +44,7 @@ func (sm *ScreenshotManager) GenerateScreenshotPath(scenarioID, stepID string) s
 }
 
 func (sm *ScreenshotManager) GenerateTracePath(scenarioID, runID string) string {
-	timestamp := time.Now().Format("20060102_150405_000")
+	timestamp := artifactTimestamp()
 	return filepath.Join(sm.baseDir, fmt.Sprintf("trace_%s_%s_%s.zip", sanitizeFileName(scenarioID), sanitizeFileName(runID), timestamp))
 }
 

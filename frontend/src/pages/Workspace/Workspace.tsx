@@ -5,8 +5,9 @@ import ResponsePanel from '../../components/ResponsePanel/ResponsePanel';
 import ErrorBoundary from '../../components/common/ErrorBoundary';
 import StressTestModal from '../../components/StressTestModal/StressTestModal';
 import EnvironmentModal from '../../components/EnvironmentModal/EnvironmentModal';
-import AutomationModal from '../../components/AutomationModal/AutomationModal';
 import MockServerModal from '../../components/MockServerModal/MockServerModal';
+
+import { useI18n } from '../../context/I18nContext';
 
 interface WorkspaceProps {
   isEnvModalOpen?: boolean;
@@ -17,6 +18,8 @@ interface WorkspaceProps {
   setIsUITestModalOpen?: (open: boolean) => void;
   isUserGuideOpen?: boolean;
   setIsUserGuideOpen?: (open: boolean) => void;
+  onNavigateAutomation?: () => void;
+  onNavigateUITest?: () => void;
 }
 
 export default function Workspace({
@@ -27,8 +30,11 @@ export default function Workspace({
   isUITestModalOpen,
   setIsUITestModalOpen,
   isUserGuideOpen,
-  setIsUserGuideOpen
+  setIsUserGuideOpen,
+  onNavigateAutomation,
+  onNavigateUITest
 }: WorkspaceProps) {
+  const { t } = useI18n();
   const { 
     tabs, activeTabId, setActiveTabId, createNewTab, closeTab, activeTab, reorderTabs
   } = useApp();
@@ -132,7 +138,7 @@ export default function Workspace({
       <div style={{
         display: 'flex',
         alignItems: 'center',
-        background: '#0d131f',
+        background: 'var(--bg-tab-bar)',
         borderBottom: '1px solid var(--border-subtle)',
         padding: '0 8px',
         overflowX: 'auto',
@@ -215,7 +221,7 @@ export default function Workspace({
         {/* Add Tab Button */}
         <button 
           onClick={() => createNewTab()}
-          title="Tạo Tab Request mới (+)"
+          title={t('workspace.addTabTooltip')}
           style={{
             background: 'transparent',
             color: 'var(--text-muted)',
@@ -254,7 +260,14 @@ export default function Workspace({
             <RequestPanel 
               onOpenStressModal={() => setIsStressModalOpen(true)}
               onOpenEnvModal={() => setEnvOpen(true)}
-              onOpenAutomationModal={() => setAutoOpen(true)}
+              onOpenAutomationModal={() => {
+                if (onNavigateAutomation) onNavigateAutomation();
+                else setAutoOpen(true);
+              }}
+              onOpenUITestModal={() => {
+                if (onNavigateUITest) onNavigateUITest();
+                else setUIAutoOpen(true);
+              }}
               onOpenMockModal={() => setIsMockModalOpen(true)}
               onOpenUserGuide={() => (setIsUserGuideOpen ? setIsUserGuideOpen(true) : null)}
             />
@@ -352,11 +365,6 @@ export default function Workspace({
       <EnvironmentModal
         isOpen={isEnvOpen}
         onClose={() => setEnvOpen(false)}
-      />
-
-      <AutomationModal
-        isOpen={isAutoOpen}
-        onClose={() => setAutoOpen(false)}
       />
 
       <MockServerModal

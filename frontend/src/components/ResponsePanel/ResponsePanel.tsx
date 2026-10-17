@@ -1,15 +1,21 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { useTheme } from '../../context/ThemeContext';
 import { Editor } from '@monaco-editor/react';
 import { BrowserOpenURL } from '../../../wailsjs/runtime/runtime';
 import HtmlFieldsInspector, { parseHtmlFormSummary } from './HtmlFieldsInspector';
+import DataHarvester from './DataHarvester';
+import { harvestResponseData } from '../../utils/dataHarvesterEngine';
+import { exportToJson, exportToCsv, exportToExcel, exportToHtml, downloadImageDirect } from '../../utils/exportHelper';
 
 export default function ResponsePanel() {
+  const { theme } = useTheme();
   const { activeTab, loading, handleStopStream, buildFullUrl } = useApp();
   const [formatMode, setFormatMode] = useState<'pretty' | 'raw'>('pretty');
-  const [activeTabSub, setActiveTabSub] = useState<'body' | 'preview' | 'html-fields' | 'headers' | 'timing' | 'assertions' | 'stream'>('body');
+  const [activeTabSub, setActiveTabSub] = useState<'body' | 'preview' | 'html-fields' | 'harvester' | 'headers' | 'timing' | 'assertions' | 'stream' | 'image'>('body');
   const [previewDeviceWidth, setPreviewDeviceWidth] = useState<'100%' | '768px' | '390px'>('100%');
   const [copied, setCopied] = useState(false);
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
 
   const response = activeTab?.response;
   const assertionResults = activeTab?.assertionResults || [];
@@ -39,11 +45,57 @@ export default function ResponsePanel() {
       trimmed.toLowerCase().includes('<!doctype html');
   }, [contentType, resBody]);
 
+  const fullUrl = activeTab ? buildFullUrl(activeTab) : '';
+
+  const isImage = useMemo(() => {
+    if (contentType.toLowerCase().includes('image/')) return true;
+    if (resBody.trim().startsWith('<svg') && resBody.includes('</svg>')) return true;
+    if (!fullUrl) return false;
+    const clean = fullUrl.split('?')[0].toLowerCase();
+    return /\.(png|jpe?g|gif|svg|webp|bmp|ico)$/.test(clean);
+  }, [contentType, fullUrl, resBody]);
+
+  const isSvg = useMemo(() => {
+    return contentType.toLowerCase().includes('svg') || (resBody.trim().startsWith('<svg') && resBody.includes('</svg>'));
+  }, [contentType, resBody]);
+
+  // The exact bytes received by the backend. Showing or saving the image from
+  // these avoids a second request to fullUrl, which would go out without the
+  // tab's auth headers (and could hit a non-idempotent endpoint again).
+  const bodyDataUri = useMemo(() => {
+    const base64 = (response as any)?.bodyBase64 as string | undefined;
+    if (!base64) return '';
+    let mime = contentType.split(';')[0].trim();
+    if (!mime || !mime.includes('/')) {
+      const ext = fullUrl.split('?')[0].split('.').pop()?.toLowerCase() || '';
+      const byExt: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml' };
+      mime = byExt[ext] || 'application/octet-stream';
+    }
+    return `data:${mime};base64,${base64}`;
+  }, [response, contentType, fullUrl]);
+
+  const imageSrc = useMemo(() => {
+    if (!isImage) return '';
+    if (isSvg) {
+      return `data:image/svg+xml;utf8,${encodeURIComponent(resBody)}`;
+    }
+    return bodyDataUri || fullUrl;
+  }, [isImage, isSvg, fullUrl, resBody, bodyDataUri]);
+
+  useEffect(() => {
+    if (isImage) {
+      setActiveTabSub('image');
+    }
+  }, [isImage]);
+
   const htmlFieldsSummary = useMemo(() => {
     return isHtml ? parseHtmlFormSummary(resBody) : null;
   }, [isHtml, resBody]);
 
-  const fullUrl = activeTab ? buildFullUrl(activeTab) : '';
+  const harvesterData = useMemo(() => {
+    if (!resBody || (response as any)?.isBinary) return null;
+    return harvestResponseData(resBody, contentType, fullUrl);
+  }, [resBody, contentType, fullUrl, response]);
 
   // Strip scripts and meta refresh so iframe CAN NEVER hijack or navigate the parent app window (window.top)
   const safePreviewHtml = useMemo(() => {
@@ -160,14 +212,24 @@ export default function ResponsePanel() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownload = () => {
-    const element = document.createElement("a");
-    const file = new Blob([displayBody], { type: isHtml ? 'text/html' : 'application/json' });
-    element.href = URL.createObjectURL(file);
-    element.download = `response_${Date.now()}.${isHtml ? 'html' : 'json'}`;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
+  const handleDownloadChoice = async (type: 'json' | 'csv' | 'excel' | 'html' | 'image') => {
+    setDownloadMenuOpen(false);
+    const baseName = (activeTab?.name || 'response').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    if (type === 'image') {
+      await downloadImageDirect(isSvg ? resBody : (bodyDataUri || fullUrl), baseName, contentType);
+      return;
+    }
+
+    if (type === 'json') {
+      await exportToJson(displayBody, `${baseName}_${Date.now()}.json`);
+    } else if (type === 'csv') {
+      await exportToCsv(displayBody, `${baseName}_${Date.now()}.csv`);
+    } else if (type === 'excel') {
+      await exportToExcel(displayBody, `${baseName}_${Date.now()}.xlsx`, 'Dữ liệu API');
+    } else if (type === 'html') {
+      await exportToHtml(displayBody, `${baseName}_${Date.now()}.html`);
+    }
   };
 
   const responseHeadersList = Object.entries(response?.headers || {});
@@ -198,7 +260,7 @@ export default function ResponsePanel() {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        background: '#0d131f',
+        background: 'var(--bg-surface-secondary)',
         flexWrap: 'wrap',
         gap: '8px',
         flexShrink: 0
@@ -287,6 +349,33 @@ export default function ResponsePanel() {
               {allAssertionsPassed ? '✓' : '✕'} Assertions: {assertionPassedCount}/{assertionResults.length} Passed
             </button>
           )}
+
+          {/* Quick Harvester Data Pill */}
+          {harvesterData && harvesterData.summary.totalItems > 0 && (
+            <button
+              onClick={() => setActiveTabSub('harvester')}
+              title="Mở Bộ Thu Thập Dữ Liệu: Trích xuất Văn bản, Số liệu, Hình ảnh từ phản hồi"
+              style={{
+                fontSize: '11px',
+                fontWeight: 700,
+                padding: '3px 8px',
+                borderRadius: '6px',
+                background: activeTabSub === 'harvester' ? 'rgba(168, 85, 247, 0.25)' : 'rgba(168, 85, 247, 0.1)',
+                color: '#c084fc',
+                border: '1px solid rgba(168, 85, 247, 0.35)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+            >
+              <span>🕷️ Thu thập:</span>
+              <span style={{ color: '#fff' }}>{harvesterData.summary.totalItems} mục</span>
+              <span style={{ fontSize: '9.5px', color: '#e9d5ff', opacity: 0.9 }}>
+                ({harvesterData.summary.textCount}T · {harvesterData.summary.numberCount}N · {harvesterData.summary.imageCount}I)
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Right Tools & Mode switch */}
@@ -300,7 +389,7 @@ export default function ResponsePanel() {
                 fontSize: '11px',
                 borderRadius: '4px',
                 background: formatMode === 'pretty' && activeTabSub === 'body' ? 'var(--color-primary)' : 'transparent',
-                color: formatMode === 'pretty' && activeTabSub === 'body' ? '#0b0f17' : 'var(--text-muted)',
+                color: formatMode === 'pretty' && activeTabSub === 'body' ? '#ffffff' : 'var(--text-muted)',
                 fontWeight: 600,
                 cursor: 'pointer'
               }}
@@ -314,7 +403,7 @@ export default function ResponsePanel() {
                 fontSize: '11px',
                 borderRadius: '4px',
                 background: formatMode === 'raw' && activeTabSub === 'body' ? 'var(--color-primary)' : 'transparent',
-                color: formatMode === 'raw' && activeTabSub === 'body' ? '#0b0f17' : 'var(--text-muted)',
+                color: formatMode === 'raw' && activeTabSub === 'body' ? '#ffffff' : 'var(--text-muted)',
                 fontWeight: 600,
                 cursor: 'pointer'
               }}
@@ -388,7 +477,7 @@ export default function ResponsePanel() {
             style={{
               padding: '3px 8px',
               background: copied ? '#10b981' : 'var(--bg-app)',
-              color: copied ? '#0b0f17' : 'var(--text-main)',
+              color: copied ? '#ffffff' : 'var(--text-main)',
               border: '1px solid var(--border-card)',
               borderRadius: '6px',
               fontSize: '11px',
@@ -399,34 +488,199 @@ export default function ResponsePanel() {
             {copied ? '✓ Đã chép' : 'Sao chép'}
           </button>
 
-          {/* Download response */}
-          <button
-            onClick={handleDownload}
-            title="Tải xuống tệp phản hồi"
-            style={{
-              padding: '3px 8px',
-              background: 'var(--bg-app)',
-              color: 'var(--text-muted)',
-              border: '1px solid var(--border-card)',
-              borderRadius: '6px',
-              fontSize: '11px',
-              cursor: 'pointer'
-            }}
-          >
-            💾
-          </button>
+          {/* Download response: CSV | Excel | JSON | Ảnh trực tiếp */}
+          {isImage ? (
+            <button
+              onClick={() => handleDownloadChoice('image')}
+              title="Tải trực tiếp file hình ảnh về máy"
+              style={{
+                padding: '3px 10px',
+                background: 'rgba(168, 85, 247, 0.15)',
+                color: '#c084fc',
+                border: '1px solid rgba(168, 85, 247, 0.4)',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+            >
+              <span>🖼️</span>
+              <span>Tải Ảnh Về</span>
+            </button>
+          ) : (
+            <div style={{ position: 'relative' }}>
+              <button
+                onClick={() => setDownloadMenuOpen(!downloadMenuOpen)}
+                title="Tải dữ liệu phản hồi (JSON, CSV, Excel)"
+                style={{
+                  padding: '3px 8px',
+                  background: 'var(--bg-app)',
+                  color: 'var(--text-main)',
+                  border: '1px solid var(--border-card)',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <span>📥 Tải dữ liệu</span>
+                <span style={{ fontSize: '9px', opacity: 0.8 }}>▼</span>
+              </button>
+
+              {downloadMenuOpen && (
+                <>
+                  <div
+                    style={{ position: 'fixed', inset: 0, zIndex: 998 }}
+                    onClick={() => setDownloadMenuOpen(false)}
+                  />
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: '4px',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border-card)',
+                    borderRadius: '8px',
+                    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.25)',
+                    zIndex: 999,
+                    minWidth: '180px',
+                    padding: '4px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px'
+                  }}>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '4px 8px', fontWeight: 700, textTransform: 'uppercase' }}>
+                      Định dạng xuất dữ liệu:
+                    </div>
+                    <button
+                      onClick={() => handleDownloadChoice('json')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '6px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        borderRadius: '5px',
+                        color: 'var(--text-main)',
+                        fontSize: '11.5px',
+                        cursor: 'pointer',
+                        textAlign: 'left'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-surface-secondary)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>📄</span>
+                      <span>Tải file <strong>JSON</strong> (.json)</span>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadChoice('csv')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '6px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        borderRadius: '5px',
+                        color: 'var(--text-main)',
+                        fontSize: '11.5px',
+                        cursor: 'pointer',
+                        textAlign: 'left'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-surface-secondary)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>📊</span>
+                      <span>Tải file <strong>CSV</strong> (.csv)</span>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadChoice('excel')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '6px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        borderRadius: '5px',
+                        color: 'var(--text-main)',
+                        fontSize: '11.5px',
+                        cursor: 'pointer',
+                        textAlign: 'left'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-surface-secondary)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span>📗</span>
+                      <span>Tải file <strong>Excel</strong> (.xlsx)</span>
+                    </button>
+                    {isHtml && (
+                      <button
+                        onClick={() => handleDownloadChoice('html')}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '6px 10px',
+                          background: 'transparent',
+                          border: 'none',
+                          borderRadius: '5px',
+                          color: 'var(--text-main)',
+                          fontSize: '11.5px',
+                          cursor: 'pointer',
+                          textAlign: 'left'
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-surface-secondary)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <span>🌐</span>
+                        <span>Tải file <strong>HTML</strong> (.html)</span>
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Subtabs Bar: Body | Website Preview | Form Fields | Headers | Timing | Assertions | Stream */}
+      {/* Subtabs Bar: Body | Website Preview | Form Fields | Image | Headers | Timing | Assertions | Stream */}
       <div style={{
         display: 'flex',
         borderBottom: '1px solid var(--border-card)',
         padding: '0 14px',
-        background: '#0f1724',
+        background: 'var(--bg-card)',
         gap: '6px',
         flexShrink: 0
       }}>
+        {isImage && (
+          <button
+            onClick={() => setActiveTabSub('image')}
+            style={{
+              padding: '6px 12px',
+              background: 'transparent',
+              color: activeTabSub === 'image' ? '#c084fc' : 'var(--text-muted)',
+              borderBottom: activeTabSub === 'image' ? '2px solid #c084fc' : '2px solid transparent',
+              fontSize: '12px',
+              fontWeight: activeTabSub === 'image' ? 700 : 400,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <span>🖼️ Xem Hình Ảnh</span>
+          </button>
+        )}
+
         <button
           onClick={() => setActiveTabSub('body')}
           style={{
@@ -493,6 +747,36 @@ export default function ResponsePanel() {
             )}
           </button>
         )}
+
+        <button
+          onClick={() => setActiveTabSub('harvester')}
+          style={{
+            padding: '6px 12px',
+            background: 'transparent',
+            color: activeTabSub === 'harvester' ? '#c084fc' : 'var(--text-muted)',
+            borderBottom: activeTabSub === 'harvester' ? '2px solid #c084fc' : '2px solid transparent',
+            fontSize: '12px',
+            fontWeight: activeTabSub === 'harvester' ? 700 : 400,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          <span>🕷️ Thu thập dữ liệu</span>
+          {harvesterData && harvesterData.summary.totalItems > 0 && (
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              padding: '1px 6px',
+              borderRadius: '8px',
+              background: activeTabSub === 'harvester' ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.15)',
+              color: '#c084fc'
+            }}>
+              {harvesterData.summary.totalItems}
+            </span>
+          )}
+        </button>
 
         <button
           onClick={() => setActiveTabSub('headers')}
@@ -585,13 +869,105 @@ export default function ResponsePanel() {
 
       {/* Body / Website Preview / HTML Fields / Headers / Timing / Assertions / Stream Display */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {activeTabSub === 'image' && isImage && (
+          <div style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+            overflow: 'auto',
+            background: 'var(--bg-app)',
+            position: 'relative'
+          }}>
+            <div style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-card)',
+              borderRadius: '12px',
+              padding: '16px',
+              maxWidth: '92%',
+              maxHeight: '88%',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '12px',
+              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.15)'
+            }}>
+              <div style={{
+                maxHeight: '60vh',
+                overflow: 'auto',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '8px',
+                background: 'var(--bg-input)',
+                padding: '10px'
+              }}>
+                <img
+                  src={imageSrc}
+                  alt={activeTab?.name || 'Ảnh phản hồi'}
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '55vh',
+                    objectFit: 'contain',
+                    borderRadius: '6px'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                  {contentType || 'image'}
+                </span>
+                <button
+                  onClick={() => handleDownloadChoice('image')}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '6px',
+                    background: 'var(--color-primary)',
+                    color: '#000',
+                    border: 'none',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <span>💾</span>
+                  <span>Tải trực tiếp file ảnh</span>
+                </button>
+                {fullUrl && !isSvg && (
+                  <button
+                    onClick={() => BrowserOpenURL(fullUrl)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      background: 'var(--bg-surface-secondary)',
+                      color: 'var(--text-main)',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '12px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    ↗ Mở trình duyệt
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTabSub === 'body' && (
           <div style={{ flex: 1, height: '100%', minHeight: 0 }}>
             <Editor
               height="100%"
               width="100%"
               defaultLanguage={isHtml ? "html" : "json"}
-              theme="vs-dark"
+              theme={theme === 'light' ? 'vs-light' : 'vs-dark'}
               value={displayBody}
               options={{
                 readOnly: true,
@@ -613,13 +989,13 @@ export default function ResponsePanel() {
             minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
-            background: '#0a0e17',
+            background: 'var(--bg-app)',
             overflow: 'hidden'
           }}>
             {/* Top Toolbar */}
             <div style={{
               padding: '6px 12px',
-              background: '#0d131f',
+              background: 'var(--bg-card)',
               borderBottom: '1px solid var(--border-card)',
               display: 'flex',
               alignItems: 'center',
@@ -629,7 +1005,7 @@ export default function ResponsePanel() {
               flexShrink: 0
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '12px', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--color-primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <span>🌐</span> Module Hiển Thị Website
                 </span>
                 <span style={{
@@ -646,7 +1022,7 @@ export default function ResponsePanel() {
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div style={{ display: 'flex', background: '#050811', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-card)' }}>
+                <div style={{ display: 'flex', background: 'var(--bg-surface-secondary)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-card)' }}>
                   <button
                     onClick={() => setPreviewDeviceWidth('100%')}
                     style={{
@@ -654,7 +1030,7 @@ export default function ResponsePanel() {
                       fontSize: '10.5px',
                       fontWeight: 600,
                       background: previewDeviceWidth === '100%' ? 'var(--color-primary)' : 'transparent',
-                      color: previewDeviceWidth === '100%' ? '#0b0f17' : 'var(--text-muted)',
+                      color: previewDeviceWidth === '100%' ? '#ffffff' : 'var(--text-muted)',
                       borderRadius: '3px',
                       cursor: 'pointer'
                     }}
@@ -668,7 +1044,7 @@ export default function ResponsePanel() {
                       fontSize: '10.5px',
                       fontWeight: 600,
                       background: previewDeviceWidth === '768px' ? 'var(--color-primary)' : 'transparent',
-                      color: previewDeviceWidth === '768px' ? '#0b0f17' : 'var(--text-muted)',
+                      color: previewDeviceWidth === '768px' ? '#ffffff' : 'var(--text-muted)',
                       borderRadius: '3px',
                       cursor: 'pointer'
                     }}
@@ -682,7 +1058,7 @@ export default function ResponsePanel() {
                       fontSize: '10.5px',
                       fontWeight: 600,
                       background: previewDeviceWidth === '390px' ? 'var(--color-primary)' : 'transparent',
-                      color: previewDeviceWidth === '390px' ? '#0b0f17' : 'var(--text-muted)',
+                      color: previewDeviceWidth === '390px' ? '#ffffff' : 'var(--text-muted)',
                       borderRadius: '3px',
                       cursor: 'pointer'
                     }}
@@ -704,9 +1080,9 @@ export default function ResponsePanel() {
                       gap: '4px',
                       padding: '3px 8px',
                       borderRadius: '4px',
-                      background: 'rgba(56, 189, 248, 0.1)',
-                      border: '1px solid rgba(56, 189, 248, 0.3)',
-                      color: '#38bdf8',
+                      background: 'var(--color-primary-bg)',
+                      border: '1px solid var(--border-focus)',
+                      color: 'var(--color-primary)',
                       fontSize: '11px',
                       fontWeight: 600,
                       cursor: 'pointer'
@@ -725,7 +1101,7 @@ export default function ResponsePanel() {
               minHeight: 0,
               display: 'flex',
               justifyContent: 'center',
-              background: '#0a0e17',
+              background: 'var(--bg-app)',
               padding: previewDeviceWidth === '100%' ? '0' : '10px',
               overflow: 'auto'
             }}>
@@ -755,6 +1131,15 @@ export default function ResponsePanel() {
           <HtmlFieldsInspector html={resBody} />
         )}
 
+        {/* Data Harvester Module (Text, Numbers, Images, Tables, Selectors) */}
+        {activeTabSub === 'harvester' && (
+          <DataHarvester
+            body={resBody}
+            contentType={contentType}
+            baseUrl={fullUrl}
+          />
+        )}
+
         {activeTabSub === 'headers' && (
           <div style={{ flex: 1, padding: '12px', overflowY: 'auto' }}>
             {responseHeadersList.length > 0 ? (
@@ -768,8 +1153,8 @@ export default function ResponsePanel() {
                 <tbody>
                   {responseHeadersList.map(([k, v]) => (
                     <tr key={k} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td style={{ padding: '6px 10px', color: '#f1f5f9', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{k}</td>
-                      <td style={{ padding: '6px 10px', color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>{v}</td>
+                      <td style={{ padding: '6px 10px', color: 'var(--text-main)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{k}</td>
+                      <td style={{ padding: '6px 10px', color: 'var(--color-primary)', fontFamily: 'var(--font-mono)' }}>{v}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -880,7 +1265,7 @@ export default function ResponsePanel() {
                       }}>
                         {item.passed ? '✓ PASS' : '✕ FAIL'}
                       </span>
-                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#f1f5f9' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-main)' }}>
                         [{item.rule.type.toUpperCase()}] {item.rule.target ? `${item.rule.target} ` : ''}{item.rule.operator} {item.rule.expected}
                       </span>
                     </div>
@@ -917,8 +1302,8 @@ export default function ResponsePanel() {
                 <div
                   key={idx}
                   style={{
-                    background: '#0d131f',
-                    border: '1px solid #1f293d',
+                    background: 'var(--bg-surface-secondary)',
+                    border: '1px solid var(--border-card)',
                     borderRadius: '6px',
                     padding: '8px 12px',
                     display: 'flex',
@@ -926,11 +1311,11 @@ export default function ResponsePanel() {
                     gap: '4px'
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8' }}>
-                    <span style={{ fontWeight: 600, color: '#38bdf8' }}>Chunk #{chunk.index || idx + 1}</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--color-primary)' }}>Chunk #{chunk.index || idx + 1}</span>
                     <span>{chunk.timestamp}</span>
                   </div>
-                  <pre style={{ margin: 0, fontSize: '12px', color: '#e2e8f0', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                  <pre style={{ margin: 0, fontSize: '12px', color: 'var(--text-main)', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                     {chunk.data}
                   </pre>
                 </div>

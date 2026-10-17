@@ -57,6 +57,20 @@ jobs:
           New-Item -ItemType Directory -Force -Path internal/updater/bin | Out-Null
           go build -trimpath -ldflags="-s -w -buildid=" -o internal/updater/bin/updater.exe ./cmd/updater/
 
+      # The app embeds this binary and launches it with --sha256; embedding the
+      # committed stub or an outdated updater would break every future update.
+      - name: Check embedded updater (Windows)
+        shell: bash
+        run: |
+          BIN=internal/updater/bin/updater.exe
+          if [ "$(wc -c < "$BIN")" -lt 100000 ]; then
+            echo "::error::$BIN looks like the stub, not a real updater build"; exit 1
+          fi
+          USAGE=$("$BIN" -h 2>&1 || true)
+          if ! grep -q -- '-sha256' <<<"$USAGE"; then
+            echo "::error::$BIN does not support --sha256"; exit 1
+          fi
+
       - name: Build main app (Windows)
         run: wails build -clean -trimpath -platform windows/amd64 -ldflags "-s -w -buildid="
 
@@ -127,6 +141,17 @@ jobs:
         run: |
           mkdir -p internal/updater/bin
           go build -trimpath -ldflags="-s -w -buildid=" -o internal/updater/bin/updater ./cmd/updater/
+
+      - name: Check embedded updater (Linux)
+        run: |
+          BIN=internal/updater/bin/updater
+          if [ "$(wc -c < "$BIN")" -lt 100000 ]; then
+            echo "::error::$BIN looks like the stub, not a real updater build"; exit 1
+          fi
+          USAGE=$("$BIN" -h 2>&1 || true)
+          if ! grep -q -- '-sha256' <<<"$USAGE"; then
+            echo "::error::$BIN does not support --sha256"; exit 1
+          fi
 
       - name: Build main app (Linux)
         run: wails build -clean -trimpath -platform linux/amd64 -ldflags "-s -w -buildid="
@@ -238,6 +263,21 @@ jobs:
           echo "Generated latest.json:"
           cat dist/latest.json
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # The app only accepts latest.json with a valid latest.json.sig made by
+      # a key embedded in internal/updater/signature.go. signmanifest fails if
+      # the secret is missing or does not match those keys.
+      - name: Sign latest.json
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          go run ./cmd/signmanifest -in dist/latest.json
+          go run ./cmd/signmanifest -verify -in dist/latest.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -253,5 +293,6 @@ jobs:
             dist/linux/${{ env.APP_NAME }}-v${{ steps.sha.outputs.version }}
             dist/linux/updater
             dist/latest.json
+            dist/latest.json.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

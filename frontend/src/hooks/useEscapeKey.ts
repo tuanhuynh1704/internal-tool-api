@@ -12,11 +12,27 @@ export interface EscapeKeyEvent {
 // LIFO stack tracking active escape handlers for modals, dropdowns, and overlays
 export const escapeStack: EscapeHandler[] = [];
 
+// Opening order of each handler. React runs child effects before parent
+// effects, so when a parent modal and a child popup mount together the push
+// order would be reversed; ordering by "opened at" (assigned during render,
+// which is top-down) keeps the innermost popup on top.
+let openSequence = 0;
+const handlerOrder = new WeakMap<EscapeHandler, number>();
+
+export function nextEscapeOrder(): number {
+  return ++openSequence;
+}
+
 /**
  * Pushes an escape handler to the LIFO stack and returns an unregister function.
  */
-export function pushEscapeHandler(handler: EscapeHandler): () => void {
-  escapeStack.push(handler);
+export function pushEscapeHandler(handler: EscapeHandler, order: number = nextEscapeOrder()): () => void {
+  handlerOrder.set(handler, order);
+  let index = escapeStack.length;
+  while (index > 0 && (handlerOrder.get(escapeStack[index - 1]) ?? 0) > order) {
+    index--;
+  }
+  escapeStack.splice(index, 0, handler);
   return () => {
     const idx = escapeStack.lastIndexOf(handler);
     if (idx !== -1) {
@@ -65,12 +81,17 @@ export function useEscapeKey(handler: () => void, isActive: boolean = true) {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
 
+  // Assigned while rendering so parents get a lower number than their children.
+  const orderRef = useRef<number | null>(null);
+  if (isActive && orderRef.current === null) orderRef.current = nextEscapeOrder();
+  if (!isActive) orderRef.current = null;
+
   useEffect(() => {
     if (!isActive) return;
 
     return pushEscapeHandler(() => {
       handlerRef.current();
-    });
+    }, orderRef.current ?? undefined);
   }, [isActive]);
 }
 

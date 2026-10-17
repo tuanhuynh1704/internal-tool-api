@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -22,16 +23,62 @@ type StepConfig struct {
 	WaitState     string `json:"waitState,omitempty"`     // "visible" | "hidden" | "attached" | "detached"
 }
 
+var validMatchOperators = map[string]bool{"": true, "equals": true, "eq": true, "contains": true, "starts_with": true, "ends_with": true, "regex": true}
+
+// pollInterval is how often value assertions re-read the page while waiting.
+const pollInterval = 100 * time.Millisecond
+
+// pollMatch re-reads a value until it satisfies the operator or the timeout
+// expires, like Playwright's web-first assertions. A single read right after a
+// click or navigation would otherwise see the previous page state.
+func pollMatch(ctx context.Context, timeout time.Duration, read func(remaining time.Duration) (string, error), expected, op string) (string, bool, error) {
+	deadline := time.Now().Add(timeout)
+	var last string
+	var lastErr error
+	for {
+		remaining := time.Until(deadline)
+		if remaining < pollInterval {
+			remaining = pollInterval
+		}
+		value, err := read(remaining)
+		if err == nil {
+			last, lastErr = value, nil
+			if checkMatch(value, expected, op) {
+				return value, true, nil
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			return last, false, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return last, false, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
 // ExecuteStep executes a single UIStep on the Playwright Page
-func ExecuteStep(page playwright.Page, step UIStep, baseURL string) (string, error) {
+func ExecuteStep(ctx context.Context, page playwright.Page, step UIStep, baseURL string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	timeoutMs := float64(step.Timeout)
 	if timeoutMs <= 0 {
 		timeoutMs = 5000
 	}
+	timeout := time.Duration(timeoutMs) * time.Millisecond
 
 	var cfg StepConfig
 	if step.ConfigJSON != "" && step.ConfigJSON != "{}" {
-		_ = json.Unmarshal([]byte(step.ConfigJSON), &cfg)
+		if err := json.Unmarshal([]byte(step.ConfigJSON), &cfg); err != nil {
+			return "", fmt.Errorf("invalid step configuration: %w", err)
+		}
+	}
+	if !validMatchOperators[cfg.Operator] {
+		return "", fmt.Errorf("unsupported match operator %q", cfg.Operator)
 	}
 
 	switch step.Type {
@@ -233,12 +280,18 @@ func ExecuteStep(page playwright.Page, step UIStep, baseURL string) (string, err
 			}
 			return fmt.Sprintf("Waited for %s to reach state %s", step.Selector, cfg.WaitState), nil
 		}
-		// Wait by milliseconds
+		// Wait by milliseconds (interruptible by Stop)
 		ms, _ := strconv.Atoi(step.Value)
 		if ms <= 0 {
 			ms = int(timeoutMs)
 		}
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		timer := time.NewTimer(time.Duration(ms) * time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		}
 		return fmt.Sprintf("Waited %dms", ms), nil
 
 	// ─── Assertions ───────────────────────────────────────────────────────────────
@@ -287,13 +340,13 @@ func ExecuteStep(page playwright.Page, step UIStep, baseURL string) (string, err
 			return "", fmt.Errorf("selector is required for assert_text")
 		}
 		locator := page.Locator(step.Selector)
-		text, err := locator.InnerText(playwright.LocatorInnerTextOptions{
-			Timeout: playwright.Float(timeoutMs),
-		})
-		if err != nil {
+		text, ok, err := pollMatch(ctx, timeout, func(remaining time.Duration) (string, error) {
+			return locator.InnerText(playwright.LocatorInnerTextOptions{Timeout: playwright.Float(float64(remaining.Milliseconds()))})
+		}, step.Value, cfg.Operator)
+		if err != nil && text == "" {
 			return "", formatAssertionError("Assert Text", step.Selector, step.Value, "Could not retrieve text from element", int(timeoutMs))
 		}
-		if !checkMatch(text, step.Value, cfg.Operator) {
+		if !ok {
 			return "", formatAssertionError("Assert Text", step.Selector, fmt.Sprintf("'%s' (%s)", step.Value, matchOpName(cfg.Operator)), fmt.Sprintf("'%s'", text), int(timeoutMs))
 		}
 		return fmt.Sprintf("Verified text of '%s' matches '%s'", step.Selector, step.Value), nil
@@ -303,13 +356,13 @@ func ExecuteStep(page playwright.Page, step UIStep, baseURL string) (string, err
 			return "", fmt.Errorf("selector is required for assert_value")
 		}
 		locator := page.Locator(step.Selector)
-		val, err := locator.InputValue(playwright.LocatorInputValueOptions{
-			Timeout: playwright.Float(timeoutMs),
-		})
-		if err != nil {
+		val, ok, err := pollMatch(ctx, timeout, func(remaining time.Duration) (string, error) {
+			return locator.InputValue(playwright.LocatorInputValueOptions{Timeout: playwright.Float(float64(remaining.Milliseconds()))})
+		}, step.Value, cfg.Operator)
+		if err != nil && val == "" {
 			return "", formatAssertionError("Assert Value", step.Selector, step.Value, "Could not retrieve input value", int(timeoutMs))
 		}
-		if !checkMatch(val, step.Value, cfg.Operator) {
+		if !ok {
 			return "", formatAssertionError("Assert Value", step.Selector, fmt.Sprintf("'%s' (%s)", step.Value, matchOpName(cfg.Operator)), fmt.Sprintf("'%s'", val), int(timeoutMs))
 		}
 		return fmt.Sprintf("Verified value of '%s' matches '%s'", step.Selector, step.Value), nil
@@ -323,30 +376,34 @@ func ExecuteStep(page playwright.Page, step UIStep, baseURL string) (string, err
 			attrName = "value"
 		}
 		locator := page.Locator(step.Selector)
-		attrVal, err := locator.GetAttribute(attrName, playwright.LocatorGetAttributeOptions{
-			Timeout: playwright.Float(timeoutMs),
-		})
-		if err != nil {
-			return "", formatAssertionError("Assert Attribute", step.Selector, fmt.Sprintf("Attribute [%s] == '%s'", attrName, step.Value), "Could not retrieve attribute", int(timeoutMs))
+		attrVal, ok, err := pollMatch(ctx, timeout, func(remaining time.Duration) (string, error) {
+			return locator.GetAttribute(attrName, playwright.LocatorGetAttributeOptions{Timeout: playwright.Float(float64(remaining.Milliseconds()))})
+		}, step.Value, cfg.Operator)
+		if err != nil && attrVal == "" {
+			return "", formatAssertionError("Assert Attribute", step.Selector, fmt.Sprintf("Attribute [%s] %s '%s'", attrName, matchOpName(cfg.Operator), step.Value), "Could not retrieve attribute", int(timeoutMs))
 		}
-		if !checkMatch(attrVal, step.Value, cfg.Operator) {
-			return "", formatAssertionError("Assert Attribute", step.Selector, fmt.Sprintf("[%s] == '%s'", attrName, step.Value), fmt.Sprintf("[%s] == '%s'", attrName, attrVal), int(timeoutMs))
+		if !ok {
+			return "", formatAssertionError("Assert Attribute", step.Selector, fmt.Sprintf("[%s] %s '%s'", attrName, matchOpName(cfg.Operator), step.Value), fmt.Sprintf("[%s] == '%s'", attrName, attrVal), int(timeoutMs))
 		}
 		return fmt.Sprintf("Verified attribute [%s] of '%s' is '%s'", attrName, step.Selector, step.Value), nil
 
 	case StepAssertURL:
-		currURL := page.URL()
-		if !checkMatch(currURL, step.Value, cfg.Operator) {
+		currURL, ok, _ := pollMatch(ctx, timeout, func(time.Duration) (string, error) {
+			return page.URL(), nil
+		}, step.Value, cfg.Operator)
+		if !ok {
 			return "", formatAssertionError("Assert URL", "page.url", fmt.Sprintf("'%s' (%s)", step.Value, matchOpName(cfg.Operator)), fmt.Sprintf("'%s'", currURL), int(timeoutMs))
 		}
 		return fmt.Sprintf("Verified URL matches '%s'", step.Value), nil
 
 	case StepAssertTitle:
-		title, err := page.Title()
-		if err != nil {
+		title, ok, err := pollMatch(ctx, timeout, func(time.Duration) (string, error) {
+			return page.Title()
+		}, step.Value, cfg.Operator)
+		if err != nil && title == "" {
 			return "", formatAssertionError("Assert Page Title", "page.title", step.Value, "Could not get page title", int(timeoutMs))
 		}
-		if !checkMatch(title, step.Value, cfg.Operator) {
+		if !ok {
 			return "", formatAssertionError("Assert Page Title", "page.title", fmt.Sprintf("'%s' (%s)", step.Value, matchOpName(cfg.Operator)), fmt.Sprintf("'%s'", title), int(timeoutMs))
 		}
 		return fmt.Sprintf("Verified page title matches '%s'", step.Value), nil
@@ -371,7 +428,8 @@ func checkMatch(actual, expected, op string) bool {
 		matched, err := regexp.MatchString(expected, actual)
 		return err == nil && matched
 	default:
-		return strings.Contains(actual, expected)
+		// Unknown operators are rejected in ExecuteStep before any comparison.
+		return false
 	}
 }
 
@@ -383,6 +441,8 @@ func matchOpName(op string) string {
 		return "starts with"
 	case "ends_with":
 		return "ends with"
+	case "regex":
+		return "matches regex"
 	default:
 		return "equals"
 	}

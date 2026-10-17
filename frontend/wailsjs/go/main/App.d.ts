@@ -13,6 +13,10 @@ export function CancelStreamRequest(arg1:string):Promise<void>;
 
 export function CheckForUpdate():Promise<updater.UpdateInfo>;
 
+export function CheckSecurityStatus():Promise<Record<string, any>>;
+
+export function ClearActivityHistoryInDB():Promise<void>;
+
 export function ClearMockServerLogs():Promise<void>;
 
 export function CreateFolderInDB(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
@@ -20,6 +24,8 @@ export function CreateFolderInDB(arg1:string,arg2:string,arg3:string,arg4:string
 export function CreateProjectInDB(arg1:string,arg2:string):Promise<void>;
 
 export function CreateRequestInDB(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<void>;
+
+export function DeleteActivityHistoryFromDB(arg1:string):Promise<void>;
 
 export function DeleteEnvironmentFromDB(arg1:string):Promise<void>;
 
@@ -39,11 +45,15 @@ export function ExecuteRequest(arg1:core.RequestPayload):Promise<core.ResponsePa
 
 export function ExecuteStreamRequest(arg1:string,arg2:core.RequestPayload):Promise<void>;
 
-export function ExportFullWorkspace():Promise<string>;
+export function ExportFullWorkspace(arg1:boolean):Promise<string>;
+
+export function GetActivityHistoryFromDB():Promise<Array<main.DBActivityHistory>>;
 
 export function GetAllProjectsData():Promise<main.ProjectDataPayload>;
 
 export function GetAppInfo():Promise<main.AppInfo>;
+
+export function GetAppSetting(arg1:string):Promise<string>;
 
 export function GetEnvironmentsFromDB():Promise<Array<main.DBEnvironment>>;
 
@@ -67,23 +77,41 @@ export function GetUITestRuns(arg1:string):Promise<Array<main.DBUITestRun>>;
 
 export function GetUpdateStatus():Promise<main.UpdateStatus>;
 
+export function GetWorkspaceSessionFromDB():Promise<main.DBWorkspaceSession>;
+
+export function ImportFullWorkspace(arg1:string):Promise<main.WorkspaceImportResult>;
+
 export function ImportPostmanCollection(arg1:string):Promise<main.PostmanImportResult>;
 
 export function InstallPlaywrightBrowsers(arg1:string):Promise<void>;
+
+export function RenameRequestInDB(arg1:string,arg2:string):Promise<void>;
 
 export function RunScenario(arg1:string,arg2:string):Promise<main.AutomationRunSummary>;
 
 export function RunUIScenario(arg1:string,arg2:string,arg3:boolean,arg4:boolean):Promise<ui.TestRunSummary>;
 
+export function SaveActivityHistoryToDB(arg1:main.DBActivityHistory):Promise<void>;
+
 export function SaveAllEnvironmentsToDB(arg1:Array<main.DBEnvironment>):Promise<void>;
 
 export function SaveEnvironmentToDB(arg1:main.DBEnvironment):Promise<void>;
+
+export function SaveFileContent(arg1:string,arg2:string):Promise<void>;
+
+export function SaveFileDialog(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
+export function SaveFileWithDialog(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
 
 export function SaveScenarioToDB(arg1:main.DBScenario):Promise<void>;
 
 export function SaveUIScenario(arg1:main.DBUIScenario):Promise<void>;
 
-export function StartDownloadUpdate(arg1:string,arg2:string,arg3:string):Promise<void>;
+export function SaveWorkspaceSessionToDB(arg1:main.DBWorkspaceSession):Promise<void>;
+
+export function SetAppSetting(arg1:string,arg2:string):Promise<void>;
+
+export function StartDownloadUpdate():Promise<void>;
 
 export function StartMockServer(arg1:number,arg2:Array<core.MockRoute>):Promise<void>;
 

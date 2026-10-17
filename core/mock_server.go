@@ -2,12 +2,14 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,6 +42,14 @@ type MockServerStatus struct {
 	Logs      []MockRequestLog `json:"logs"`
 }
 
+const (
+	// mockMaxDelay keeps simulated latency below the server write timeout so a
+	// delayed response is still delivered to the client.
+	mockMaxDelay      = 60 * time.Second
+	mockWriteTimeout  = mockMaxDelay + 10*time.Second
+	mockMaxBodyLogged = 1 << 20
+)
+
 type MockServerEngine struct {
 	mu        sync.RWMutex
 	server    *http.Server
@@ -47,6 +57,7 @@ type MockServerEngine struct {
 	routes    []MockRoute
 	isRunning bool
 	logs      []MockRequestLog
+	logSeq    atomic.Uint64
 }
 
 func NewMockServerEngine() *MockServerEngine {
@@ -62,14 +73,14 @@ func (m *MockServerEngine) Start(port int, routes []MockRoute) error {
 
 	if m.isRunning {
 		if m.port == port {
-			m.routes = routes
+			m.routes = cloneRoutes(routes)
 			return nil
 		}
 		_ = m.stopInternal()
 	}
 
 	m.port = port
-	m.routes = routes
+	m.routes = cloneRoutes(routes)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", m.handleRequest)
@@ -79,18 +90,20 @@ func (m *MockServerEngine) Start(port int, routes []MockRoute) error {
 		return fmt.Errorf("cannot bind mock server on port %d: %w", port, err)
 	}
 
-	m.server = &http.Server{
+	server := &http.Server{
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: mockWriteTimeout,
 	}
-
+	m.server = server
 	m.isRunning = true
 
 	go func() {
-		if err := m.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			m.mu.Lock()
-			m.isRunning = false
+			if m.server == server {
+				m.isRunning = false
+			}
 			m.mu.Unlock()
 		}
 	}()
@@ -116,10 +129,25 @@ func (m *MockServerEngine) stopInternal() error {
 	return err
 }
 
+// cloneRoutes deep-copies the routes so request handlers never share (and
+// concurrently write) the header maps owned by the caller.
+func cloneRoutes(routes []MockRoute) []MockRoute {
+	out := make([]MockRoute, len(routes))
+	for i, route := range routes {
+		out[i] = route
+		out[i].ResponseHeaders = make(map[string]string, len(route.ResponseHeaders))
+		for key, value := range route.ResponseHeaders {
+			out[i].ResponseHeaders[http.CanonicalHeaderKey(strings.TrimSpace(key))] = value
+		}
+	}
+	return out
+}
+
 func (m *MockServerEngine) UpdateRoutes(routes []MockRoute) {
+	cloned := cloneRoutes(routes)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.routes = routes
+	m.routes = cloned
 }
 
 func (m *MockServerEngine) ClearLogs() {
@@ -137,7 +165,7 @@ func (m *MockServerEngine) GetStatus() MockServerStatus {
 
 	url := ""
 	if m.isRunning {
-		url = fmt.Sprintf("http://localhost:%d", m.port)
+		url = fmt.Sprintf("http://127.0.0.1:%d", m.port)
 	}
 
 	return MockServerStatus{
@@ -148,59 +176,129 @@ func (m *MockServerEngine) GetStatus() MockServerStatus {
 	}
 }
 
-func (m *MockServerEngine) handleRequest(w http.ResponseWriter, r *http.Request) {
-	m.mu.Lock()
-	routes := make([]MockRoute, len(m.routes))
-	copy(routes, m.routes)
-	m.mu.Unlock()
+// routeMatchScore ranks how specifically a route matches a request path.
+// Higher is better; -1 means no match. Exact paths beat parameterised paths
+// (":id" or "{id}" segments), which beat prefix matches; among prefixes the
+// longest wins, and "*" is the last resort.
+func routeMatchScore(routePath, reqPath string) int {
+	if routePath == "*" {
+		return 0
+	}
+	if routePath == reqPath {
+		return 1_000_000
+	}
+	routeSegs := strings.Split(strings.Trim(routePath, "/"), "/")
+	reqSegs := strings.Split(strings.Trim(reqPath, "/"), "/")
+	if len(routeSegs) == len(reqSegs) {
+		score := 500_000
+		matched := true
+		for i, seg := range routeSegs {
+			isParam := strings.HasPrefix(seg, ":") || (strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}"))
+			switch {
+			case isParam && reqSegs[i] != "":
+				score += 1
+			case seg == reqSegs[i]:
+				score += 10
+			default:
+				matched = false
+			}
+		}
+		if matched {
+			return score
+		}
+	}
+	if routePath != "/" && !strings.HasSuffix(routePath, "/") && strings.HasPrefix(reqPath, routePath+"/") {
+		return 1_000 + len(routePath)
+	}
+	return -1
+}
 
-	reqPath := r.URL.Path
-	reqMethod := r.Method
-
-	var matchedRoute *MockRoute
+func matchMockRoute(routes []MockRoute, method, reqPath string) *MockRoute {
+	var best *MockRoute
+	bestScore := -1
 	for i := range routes {
 		route := &routes[i]
 		if !route.Enabled {
 			continue
 		}
-		methodMatch := route.Method == "*" || strings.EqualFold(route.Method, reqMethod)
-		pathMatch := route.Path == "*" || route.Path == reqPath || (route.Path != "/" && strings.HasSuffix(route.Path, "/") == false && strings.HasPrefix(reqPath, route.Path+"/"))
-		if methodMatch && pathMatch {
-			matchedRoute = route
-			break
+		exactMethod := strings.EqualFold(route.Method, method)
+		if !exactMethod && route.Method != "*" {
+			continue
+		}
+		score := routeMatchScore(route.Path, reqPath)
+		if score < 0 {
+			continue
+		}
+		score *= 2
+		if exactMethod {
+			score++
+		}
+		if score > bestScore {
+			best, bestScore = route, score
 		}
 	}
+	return best
+}
 
-	bodyBytes, _ := io.ReadAll(r.Body)
+func (m *MockServerEngine) handleRequest(w http.ResponseWriter, r *http.Request) {
+	m.mu.RLock()
+	routes := m.routes
+	m.mu.RUnlock()
+
+	reqPath := r.URL.Path
+	reqMethod := r.Method
+
+	matchedRoute := matchMockRoute(routes, reqMethod, reqPath)
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, mockMaxBodyLogged))
 	reqHeaders := make(map[string]string)
 	for k, v := range r.Header {
 		reqHeaders[k] = strings.Join(v, ", ")
 	}
 
 	status := http.StatusNotFound
-	respBody := `{"error": "Mock route not found", "path": "` + reqPath + `"}`
+	notFound, _ := json.Marshal(map[string]string{"error": "Mock route not found", "path": reqPath})
+	respBody := string(notFound)
 	headers := map[string]string{"Content-Type": "application/json"}
 
 	if matchedRoute != nil {
 		if matchedRoute.DelayMs > 0 {
-			time.Sleep(time.Duration(matchedRoute.DelayMs) * time.Millisecond)
+			delay := time.Duration(matchedRoute.DelayMs) * time.Millisecond
+			if delay > mockMaxDelay {
+				delay = mockMaxDelay
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-r.Context().Done():
+				timer.Stop()
+				return
+			}
 		}
 		status = matchedRoute.StatusCode
 		if status <= 0 {
 			status = http.StatusOK
 		}
 		respBody = matchedRoute.ResponseBody
-		headers = matchedRoute.ResponseHeaders
-		if headers == nil {
-			headers = make(map[string]string)
+		// Copy before adding defaults: the route map is shared by concurrent requests.
+		headers = make(map[string]string, len(matchedRoute.ResponseHeaders)+1)
+		for key, value := range matchedRoute.ResponseHeaders {
+			headers[key] = value
 		}
 		if _, hasContentType := headers["Content-Type"]; !hasContentType {
+			headers["Content-Type"] = "application/json"
+		}
+		if status < 100 || status > 999 {
+			// net/http panics on such codes; report the misconfiguration instead.
+			status = http.StatusInternalServerError
+			invalid, _ := json.Marshal(map[string]any{"error": "Invalid mock status code", "statusCode": matchedRoute.StatusCode})
+			respBody = string(invalid)
 			headers["Content-Type"] = "application/json"
 		}
 	}
 
 	logEntry := MockRequestLog{
-		ID:        fmt.Sprintf("log_%d", time.Now().UnixNano()),
+		ID:        fmt.Sprintf("log_%d_%d", time.Now().UnixNano(), m.logSeq.Add(1)),
 		Timestamp: time.Now().Format("15:04:05.000"),
 		Method:    reqMethod,
 		Path:      reqPath,

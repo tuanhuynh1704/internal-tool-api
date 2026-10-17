@@ -14,6 +14,9 @@ jobs:
       - run: npx --prefix frontend tsc --noEmit -p frontend/tsconfig.json
       - run: npm run build --prefix frontend
       - run: go vet ./...
+      # Keychain (macOS) code only compiles for darwin; vet it so a break is
+      # caught here rather than on a Mac.
+      - run: GOOS=darwin GOARCH=arm64 go vet ./internal/... ./cmd/...
       - run: go test -race ./...
       - name: Enforce Go coverage baseline
         run: |

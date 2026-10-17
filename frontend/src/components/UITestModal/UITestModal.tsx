@@ -18,10 +18,12 @@ import UIStepList from './UIStepList';
 import UIRunnerPanel from './UIRunnerPanel';
 import UIScreenshotModal from './UIScreenshotModal';
 import useEscapeKey from '../../hooks/useEscapeKey';
+import { confirmDialog, alertDialog } from '../common/Dialog';
 
 interface UITestModalProps {
   isOpen: boolean;
   onClose: () => void;
+  isPage?: boolean;
 }
 
 interface StepProgressEvent {
@@ -95,7 +97,7 @@ const DEFAULT_DEMO_UI_SCENARIO: main.DBUIScenario = new main.DBUIScenario({
   ]
 });
 
-export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
+export default function UITestModal({ isOpen, onClose, isPage = false }: UITestModalProps) {
   useEscapeKey(onClose, isOpen);
 
   const { environments, activeEnvId } = useApp();
@@ -266,7 +268,14 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
 
   const handleDeleteScenario = async (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!window.confirm('Are you sure you want to delete this UI test scenario?')) return;
+    const confirmed = await confirmDialog({
+      title: 'Xóa kịch bản UI Test',
+      message: 'Bạn có chắc chắn muốn xóa kịch bản kiểm thử giao diện này? Thao tác này không thể hoàn tác.',
+      variant: 'danger',
+      confirmText: 'Xóa kịch bản',
+      cancelText: 'Hủy'
+    });
+    if (!confirmed) return;
     await DeleteUIScenario(id);
     await loadScenarios();
   };
@@ -441,7 +450,12 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
       setScreenshotData({ url: b64, stepName, error });
       setScreenshotModalOpen(true);
     } catch (err) {
-      alert(`Could not load screenshot: ${err}`);
+      await alertDialog({
+        title: 'Lỗi tải ảnh chụp',
+        message: `Không thể tải ảnh chụp màn hình: ${err}`,
+        variant: 'error',
+        confirmText: 'Đóng'
+      });
     }
   };
 
@@ -452,9 +466,19 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
     try {
       const browser = activeScenario?.browser || 'chromium';
       await InstallPlaywrightBrowsers(browser);
-      alert(`✓ Playwright ${browser} browser installed successfully!`);
+      await alertDialog({
+        title: 'Cài đặt Playwright thành công',
+        message: `✓ Trình duyệt Playwright (${browser}) đã được cài đặt thành công!`,
+        variant: 'success',
+        confirmText: 'Tuyệt vời'
+      });
     } catch (err: any) {
-      alert(`Installation error: ${err?.message || err}`);
+      await alertDialog({
+        title: 'Lỗi cài đặt Playwright',
+        message: `Không thể cài đặt trình duyệt: ${err?.message || err}`,
+        variant: 'error',
+        confirmText: 'Đóng'
+      });
     } finally {
       setInstallingBrowsers(false);
     }
@@ -462,103 +486,119 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
 
   if (!isOpen) return null;
 
-  return (
+  const innerContent = (
     <div
       style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'rgba(5, 8, 15, 0.88)',
-        backdropFilter: 'blur(8px)',
-        zIndex: 1000,
+        width: isPage ? '100%' : '96vw',
+        height: isPage ? '100%' : '92vh',
+        background: 'var(--bg-app)',
+        border: isPage ? 'none' : '1px solid var(--border-card)',
+        borderRadius: isPage ? 0 : '12px',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '16px'
+        flexDirection: 'column',
+        overflow: 'hidden',
+        boxShadow: isPage ? 'none' : '0 24px 64px rgba(0,0,0,0.8)',
+        color: 'var(--text-main)'
       }}
-      onClick={onClose}
+      onClick={(e) => e.stopPropagation()}
     >
+      {/* Top Header Bar */}
       <div
         style={{
-          width: '96vw',
-          height: '92vh',
-          background: '#0a0e17',
-          border: '1px solid #1e293b',
-          borderRadius: '12px',
+          padding: '12px 20px',
+          background: 'var(--bg-header-gradient)',
+          borderBottom: '1px solid var(--border-subtle)',
           display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          boxShadow: '0 24px 64px rgba(0,0,0,0.8)'
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexShrink: 0
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        {/* Top Header Bar */}
-        <div
-          style={{
-            padding: '12px 20px',
-            background: 'linear-gradient(90deg, #0f172a 0%, #131e32 100%)',
-            borderBottom: '1px solid #1e293b',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexShrink: 0
-          }}
-        >
-          {/* Brand & Title */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div
+        {/* Brand & Title */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {isPage && (
+            <button
+              type="button"
+              onClick={onClose}
+              title="Quay lại API Client"
               style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '8px',
-                background: 'rgba(56, 189, 248, 0.15)',
-                border: '1px solid rgba(56, 189, 248, 0.3)',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '18px'
+                gap: '6px',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-card)',
+                color: 'var(--text-main)',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                transition: 'all 0.15s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--color-primary)';
+                e.currentTarget.style.color = 'var(--color-primary)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border-card)';
+                e.currentTarget.style.color = 'var(--text-main)';
               }}
             >
-              🌐
+              <span>←</span> API Client
+            </button>
+          )}
+
+          <div
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '8px',
+              background: 'rgba(56, 189, 248, 0.15)',
+              border: '1px solid rgba(56, 189, 248, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '18px'
+            }}
+          >
+            🌐
+          </div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '15px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>UI Automation Studio</span>
+              <span
+                style={{
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  background: 'var(--color-primary-bg)',
+                  color: 'var(--color-primary)',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  padding: '1px 6px',
+                  borderRadius: '10px',
+                  fontFamily: 'var(--font-mono)'
+                }}
+              >
+                Playwright Engine
+              </span>
             </div>
-            <div>
-              <div style={{ fontWeight: 800, fontSize: '15px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>UI Automation Studio</span>
-                <span
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    background: 'rgba(56, 189, 248, 0.12)',
-                    color: '#38bdf8',
-                    border: '1px solid rgba(56, 189, 248, 0.3)',
-                    padding: '1px 6px',
-                    borderRadius: '10px',
-                    fontFamily: 'var(--font-mono)'
-                  }}
-                >
-                  Playwright Engine
-                </span>
-              </div>
-              <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                Create, inspect, and execute browser automation test scenarios
-              </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              Create, inspect, and execute browser automation test scenarios
             </div>
           </div>
+        </div>
 
           {/* Top Controls & Close Button */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             {/* Environment Selector */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#0a0e17', padding: '4px 8px', borderRadius: '6px', border: '1px solid #1e293b' }}>
-              <span style={{ fontSize: '11px', color: '#94a3b8' }}>🌐 Env:</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-input)', padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border-card)' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>🌐 Env:</span>
               <select
                 value={selectedEnvId}
                 onChange={(e) => setSelectedEnvId(e.target.value)}
                 style={{
                   background: 'transparent',
                   border: 'none',
-                  color: '#38bdf8',
+                  color: 'var(--color-primary)',
                   fontSize: '12px',
                   fontWeight: 600,
                   outline: 'none',
@@ -578,9 +618,9 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
               disabled={installingBrowsers}
               title="Download & Install Playwright Chromium Drivers"
               style={{
-                background: '#1e293b',
-                border: '1px solid #334155',
-                color: '#cbd5e1',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-card)',
+                color: 'var(--text-main)',
                 padding: '6px 12px',
                 borderRadius: '6px',
                 fontSize: '11.5px',
@@ -599,9 +639,9 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
             <button
               onClick={onClose}
               style={{
-                background: '#1e293b',
-                border: 'none',
-                color: '#cbd5e1',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-card)',
+                color: 'var(--text-main)',
                 width: '32px',
                 height: '32px',
                 borderRadius: '6px',
@@ -616,13 +656,13 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
         </div>
 
         {/* Main Body (Split 3 Columns: Scenarios Sidebar | Step Builder & Flow | Live Runner / History) */}
-        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', background: 'var(--bg-app)' }}>
           {/* Column 1: Scenarios Sidebar (240px) */}
           <div
             style={{
               width: '240px',
-              borderRight: '1px solid #1e293b',
-              background: '#0b111e',
+              borderRight: '1px solid var(--border-subtle)',
+              background: 'var(--bg-sidebar)',
               display: 'flex',
               flexDirection: 'column',
               flexShrink: 0
@@ -631,21 +671,21 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
             <div
               style={{
                 padding: '12px',
-                borderBottom: '1px solid #1e293b',
+                borderBottom: '1px solid var(--border-subtle)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between'
               }}
             >
-              <span style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
                 Scenarios ({scenarios.length})
               </span>
               <button
                 onClick={handleCreateScenario}
                 style={{
-                  background: 'var(--color-primary)',
-                  color: '#0b0f17',
-                  border: 'none',
+                  background: 'var(--color-primary-bg)',
+                  color: 'var(--color-primary)',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
                   padding: '3px 8px',
                   borderRadius: '4px',
                   fontSize: '11px',
@@ -671,7 +711,7 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                     style={{
                       padding: '8px 10px',
                       borderRadius: '6px',
-                      background: isActive ? '#1e293b' : 'transparent',
+                      background: isActive ? 'var(--bg-active)' : 'transparent',
                       borderLeft: isActive ? '3px solid var(--color-primary)' : '3px solid transparent',
                       cursor: 'pointer',
                       display: 'flex',
@@ -681,10 +721,10 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                     }}
                   >
                     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                      <span style={{ fontSize: '12.5px', fontWeight: isActive ? 600 : 400, color: isActive ? '#f8fafc' : '#cbd5e1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontSize: '12.5px', fontWeight: isActive ? 600 : 400, color: isActive ? 'var(--text-main)' : 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {sc.name}
                       </span>
-                      <span style={{ fontSize: '10.5px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>
+                      <span style={{ fontSize: '10.5px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
                         {sc.steps?.length || 0} steps • {sc.browser || 'chromium'}
                       </span>
                     </div>
@@ -696,13 +736,13 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                         style={{
                           background: 'transparent',
                           border: 'none',
-                          color: '#64748b',
+                          color: 'var(--text-dim)',
                           cursor: 'pointer',
                           padding: '2px 4px',
                           fontSize: '11px'
                         }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = '#64748b')}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--method-delete)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-dim)')}
                       >
                         ✕
                       </button>
@@ -720,8 +760,8 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
               <div
                 style={{
                   padding: '10px 16px',
-                  background: '#0f172a',
-                  borderBottom: '1px solid #1e293b',
+                  background: 'var(--bg-card)',
+                  borderBottom: '1px solid var(--border-subtle)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
@@ -742,9 +782,9 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                       if (activeScenario) handleSaveActiveScenario(activeScenario);
                     }}
                     style={{
-                      background: '#0a0e17',
-                      color: '#f8fafc',
-                      border: '1px solid #334155',
+                      background: 'var(--bg-input)',
+                      color: 'var(--text-main)',
+                      border: '1px solid var(--border-card)',
                       borderRadius: '6px',
                       padding: '5px 10px',
                       fontSize: '13px',
@@ -754,7 +794,7 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                   />
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontSize: '11px', color: '#94a3b8' }}>Base URL:</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Base URL:</span>
                     <input
                       type="text"
                       placeholder="https://example.com"
@@ -767,9 +807,9 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                         if (activeScenario) handleSaveActiveScenario(activeScenario);
                       }}
                       style={{
-                        background: '#0a0e17',
-                        color: '#f8fafc',
-                        border: '1px solid #334155',
+                        background: 'var(--bg-input)',
+                        color: 'var(--text-main)',
+                        border: '1px solid var(--border-card)',
                         borderRadius: '6px',
                         padding: '5px 8px',
                         fontSize: '12px',
@@ -781,7 +821,7 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
 
                   {/* Browser Selector */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ fontSize: '11px', color: '#94a3b8' }}>Browser:</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Browser:</span>
                     <select
                       value={activeScenario.browser || 'chromium'}
                       onChange={(e) => {
@@ -792,9 +832,9 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                         }
                       }}
                       style={{
-                        background: '#0a0e17',
-                        color: '#f8fafc',
-                        border: '1px solid #334155',
+                        background: 'var(--bg-input)',
+                        color: 'var(--text-main)',
+                        border: '1px solid var(--border-card)',
                         borderRadius: '6px',
                         padding: '5px 8px',
                         fontSize: '12px',
@@ -811,7 +851,7 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                 {/* Runner Controls & Tabs */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {/* Headless Toggle */}
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: '#94a3b8', cursor: 'pointer' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: 'var(--text-muted)', cursor: 'pointer' }}>
                     <input
                       type="checkbox"
                       checked={headless}
@@ -819,7 +859,7 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                     />
                     <span>Headless</span>
                   </label>
-                  <label title="Only enable for a trusted development environment with a self-signed certificate" style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: '#fbbf24', cursor: 'pointer' }}>
+                  <label title="Only enable for a trusted development environment with a self-signed certificate" style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: 'var(--method-post)', cursor: 'pointer' }}>
                     <input
                       type="checkbox"
                       checked={ignoreHTTPSErrors}
@@ -829,15 +869,16 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                   </label>
 
                   {/* View Tabs */}
-                  <div style={{ display: 'flex', background: '#0a0e17', borderRadius: '6px', padding: '2px', border: '1px solid #1e293b' }}>
+                  <div style={{ display: 'flex', background: 'var(--bg-surface-secondary)', borderRadius: '6px', padding: '2px', border: '1px solid var(--border-subtle)' }}>
                     <button
                       onClick={() => setActiveViewTab('builder')}
                       style={{
                         padding: '4px 10px',
                         borderRadius: '4px',
                         border: 'none',
-                        background: activeViewTab === 'builder' ? '#1e293b' : 'transparent',
-                        color: activeViewTab === 'builder' ? '#38bdf8' : '#94a3b8',
+                        background: activeViewTab === 'builder' ? 'var(--bg-card)' : 'transparent',
+                        color: activeViewTab === 'builder' ? 'var(--color-primary)' : 'var(--text-muted)',
+                        boxShadow: activeViewTab === 'builder' ? 'var(--shadow-card)' : 'none',
                         fontSize: '11.5px',
                         fontWeight: 600,
                         cursor: 'pointer'
@@ -851,8 +892,9 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                         padding: '4px 10px',
                         borderRadius: '4px',
                         border: 'none',
-                        background: activeViewTab === 'runner' ? '#1e293b' : 'transparent',
-                        color: activeViewTab === 'runner' ? '#38bdf8' : '#94a3b8',
+                        background: activeViewTab === 'runner' ? 'var(--bg-card)' : 'transparent',
+                        color: activeViewTab === 'runner' ? 'var(--color-primary)' : 'var(--text-muted)',
+                        boxShadow: activeViewTab === 'runner' ? 'var(--shadow-card)' : 'none',
                         fontSize: '11.5px',
                         fontWeight: 600,
                         cursor: 'pointer'
@@ -869,8 +911,9 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                         padding: '4px 10px',
                         borderRadius: '4px',
                         border: 'none',
-                        background: activeViewTab === 'history' ? '#1e293b' : 'transparent',
-                        color: activeViewTab === 'history' ? '#38bdf8' : '#94a3b8',
+                        background: activeViewTab === 'history' ? 'var(--bg-card)' : 'transparent',
+                        color: activeViewTab === 'history' ? 'var(--color-primary)' : 'var(--text-muted)',
+                        boxShadow: activeViewTab === 'history' ? 'var(--shadow-card)' : 'none',
                         fontSize: '11.5px',
                         fontWeight: 600,
                         cursor: 'pointer'
@@ -905,7 +948,7 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                       onClick={handleRunTest}
                       style={{
                         background: 'linear-gradient(135deg, #38bdf8 0%, #0284c7 100%)',
-                        color: '#0b0f17',
+                        color: '#ffffff',
                         border: 'none',
                         padding: '6px 16px',
                         borderRadius: '6px',
@@ -925,13 +968,13 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
               </div>
 
               {/* View Tab Contents */}
-              <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '12px', gap: '12px' }}>
+              <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '12px', gap: '12px', background: 'var(--bg-app)' }}>
                 {activeViewTab === 'builder' && (
                   <div style={{ flex: 1, display: 'grid', gridTemplateColumns: isEditingStep ? '1.1fr 1fr' : '1fr', gap: '12px', overflow: 'hidden' }}>
                     {/* Left: Step List */}
-                    <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#070b12', border: '1px solid #1e293b', borderRadius: '8px', padding: '12px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-card)', border: '1px solid var(--border-card)', borderRadius: '8px', padding: '12px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 700, color: '#f8fafc' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
                           Step Execution Sequence
                         </span>
                         <button
@@ -999,13 +1042,13 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                 {activeViewTab === 'history' && (
                   <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '240px 1fr', gap: '12px', overflow: 'hidden' }}>
                     {/* Runs List */}
-                    <div style={{ background: '#070b12', border: '1px solid #1e293b', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column' }}>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: '8px' }}>
+                    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-card)', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>
                         Previous Test Runs ({testRuns.length})
                       </span>
                       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         {testRuns.length === 0 ? (
-                          <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
+                          <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' }}>
                             No past runs for this scenario.
                           </div>
                         ) : (
@@ -1019,8 +1062,8 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                                 style={{
                                   padding: '8px',
                                   borderRadius: '6px',
-                                  background: isSel ? '#1e293b' : '#0f172a',
-                                  border: isSel ? '1px solid var(--color-primary)' : '1px solid #1e293b',
+                                  background: isSel ? 'var(--bg-active)' : 'var(--bg-input)',
+                                  border: isSel ? '1px solid var(--color-primary)' : '1px solid var(--border-card)',
                                   cursor: 'pointer'
                                 }}
                               >
@@ -1032,16 +1075,16 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                                       padding: '1px 6px',
                                       borderRadius: '4px',
                                       background: isPass ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                                      color: isPass ? '#34d399' : '#f87171'
+                                      color: isPass ? '#10b981' : '#ef4444'
                                     }}
                                   >
                                     {r.status}
                                   </span>
-                                  <span style={{ fontSize: '10px', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>
+                                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                                     {r.duration}ms
                                   </span>
                                 </div>
-                                <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '4px' }}>
+                                <div style={{ fontSize: '11px', color: 'var(--text-main)', marginTop: '4px' }}>
                                   {r.startedAt}
                                 </div>
                               </div>
@@ -1052,8 +1095,8 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                     </div>
 
                     {/* Run Results Detail */}
-                    <div style={{ background: '#070b12', border: '1px solid #1e293b', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: '#f8fafc', marginBottom: '10px' }}>
+                    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-card)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '10px' }}>
                         Step Execution Results: {selectedRunId || 'None'}
                       </span>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1063,18 +1106,18 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
                             style={{
                               padding: '8px 12px',
                               borderRadius: '6px',
-                              background: hr.status === 'FAILED' ? 'rgba(239, 68, 68, 0.08)' : '#0f172a',
-                              border: hr.status === 'FAILED' ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid #1e293b',
+                              background: hr.status === 'FAILED' ? 'rgba(239, 68, 68, 0.08)' : 'var(--bg-input)',
+                              border: hr.status === 'FAILED' ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid var(--border-card)',
                               display: 'flex',
                               flexDirection: 'column',
                               gap: '4px'
                             }}
                           >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span style={{ fontSize: '12px', fontWeight: 600, color: hr.status === 'FAILED' ? '#f87171' : '#34d399' }}>
+                              <span style={{ fontSize: '12px', fontWeight: 600, color: hr.status === 'FAILED' ? '#ef4444' : '#10b981' }}>
                                 {hr.status === 'PASSED' ? '✓' : '✕'} Step #{idx + 1}
                               </span>
-                              <span style={{ fontSize: '10px', color: '#64748b', fontFamily: 'var(--font-mono)' }}>
+                              <span style={{ fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
                                 {hr.duration}ms
                               </span>
                             </div>
@@ -1122,15 +1165,49 @@ export default function UITestModal({ isOpen, onClose }: UITestModalProps) {
           )}
         </div>
       </div>
+    );
 
-      {/* Failure Screenshot Zoom Modal */}
-      <UIScreenshotModal
-        isOpen={screenshotModalOpen}
-        onClose={() => setScreenshotModalOpen(false)}
-        imageUrl={screenshotData.url}
-        stepName={screenshotData.stepName}
-        error={screenshotData.error}
-      />
-    </div>
-  );
-}
+    if (isPage) {
+      return (
+        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+          {innerContent}
+          <UIScreenshotModal
+            isOpen={screenshotModalOpen}
+            onClose={() => setScreenshotModalOpen(false)}
+            imageUrl={screenshotData.url}
+            stepName={screenshotData.stepName}
+            error={screenshotData.error}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(5, 8, 15, 0.88)',
+          backdropFilter: 'blur(8px)',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '16px'
+        }}
+        onClick={onClose}
+      >
+        {innerContent}
+        <UIScreenshotModal
+          isOpen={screenshotModalOpen}
+          onClose={() => setScreenshotModalOpen(false)}
+          imageUrl={screenshotData.url}
+          stepName={screenshotData.stepName}
+          error={screenshotData.error}
+        />
+      </div>
+    );
+  }

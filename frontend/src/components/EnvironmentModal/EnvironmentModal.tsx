@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp, Environment, EnvVariable } from '../../context/AppContext';
 import useEscapeKey from '../../hooks/useEscapeKey';
+import { confirmDialog, alertDialog } from '../common/Dialog';
 
 interface EnvironmentModalProps {
   isOpen: boolean;
@@ -48,10 +49,22 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
 
   const handleDeleteEnv = async (id: string) => {
     if (environments.length <= 1) {
-      alert("Bạn cần giữ lại ít nhất một môi trường.");
+      await alertDialog({
+        title: "Không thể xóa",
+        message: "Bạn cần giữ lại ít nhất một môi trường hoạt động trong hệ thống.",
+        variant: "warning",
+        confirmText: "Đã hiểu"
+      });
       return;
     }
-    if (window.confirm("Bạn có chắc chắn muốn xóa môi trường này? Dữ liệu sẽ bị xóa khỏi CSDL.")) {
+    const confirmed = await confirmDialog({
+      title: "Xóa môi trường",
+      message: "Bạn có chắc chắn muốn xóa môi trường này? Tất cả các biến môi trường cấu hình bên trong sẽ bị xóa vĩnh viễn khỏi CSDL.",
+      variant: "danger",
+      confirmText: "Xóa môi trường",
+      cancelText: "Hủy"
+    });
+    if (confirmed) {
       await deleteEnvironment(id);
       const remaining = environments.filter(e => e.id !== id);
       if (selectedEnvId === id) setSelectedEnvId(remaining[0]?.id || '');
@@ -122,34 +135,34 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
       padding: '20px'
     }}>
       <div style={{
-        background: '#111827',
-        border: '1px solid #1f293d',
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-card)',
         borderRadius: '12px',
         width: '800px',
         maxWidth: '100%',
         maxHeight: '85vh',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)',
+        boxShadow: 'var(--shadow-dropdown)',
         overflow: 'hidden'
       }}>
         {/* Header */}
         <div style={{
           padding: '14px 20px',
-          borderBottom: '1px solid #1f293d',
+          borderBottom: '1px solid var(--border-card)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          background: '#0d131f'
+          background: 'var(--bg-surface-secondary)'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '18px' }}>🌐</span>
             <div>
-              <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: '#f1f5f9' }}>
+              <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--text-main)' }}>
                 Quản lý Biến Môi trường (Environments) - SQLite Auto-Save
               </h2>
-              <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-                Sử dụng cú pháp <code style={{ color: '#38bdf8' }}>&#123;&#123;variable_name&#125;&#125;</code> trong URL, Headers, Body và Auth Token.
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                Sử dụng cú pháp <code style={{ color: 'var(--color-primary)' }}>&#123;&#123;variable_name&#125;&#125;</code> trong URL, Headers, Body và Auth Token.
               </span>
             </div>
           </div>
@@ -175,8 +188,8 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
           {/* Left Environments List */}
           <div style={{
             width: '230px',
-            borderRight: '1px solid #1f293d',
-            background: '#0d131f',
+            borderRight: '1px solid var(--border-card)',
+            background: 'var(--bg-surface-secondary)',
             padding: '12px',
             display: 'flex',
             flexDirection: 'column',
@@ -360,10 +373,10 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
                 </div>
 
                 {/* Table */}
-                <div style={{ flex: 1, overflowY: 'auto', border: '1px solid #1f293d', borderRadius: '8px', background: '#0d131f' }}>
+                <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--border-card)', borderRadius: '8px', background: 'var(--bg-app)' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                     <thead>
-                      <tr style={{ background: '#151e2e', borderBottom: '1px solid #1f293d', color: '#94a3b8', textAlign: 'left' }}>
+                      <tr style={{ background: 'var(--bg-card)', borderBottom: '1px solid var(--border-card)', color: 'var(--text-muted)', textAlign: 'left' }}>
                         <th style={{ width: '40px', padding: '8px', textAlign: 'center' }}>Bật</th>
                         <th style={{ padding: '8px', width: '35%' }}>Tên biến (Key)</th>
                         <th style={{ padding: '8px' }}>Giá trị (Value)</th>
@@ -372,7 +385,7 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
                     </thead>
                     <tbody>
                       {currentEnv.variables.map(v => (
-                        <tr key={v.id} style={{ borderBottom: '1px solid #1f293d' }}>
+                        <tr key={v.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                           <td style={{ padding: '8px', textAlign: 'center' }}>
                             <input
                               type="checkbox"
@@ -387,7 +400,7 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
                               placeholder="e.g. base_url"
                               value={v.key}
                               onChange={e => handleUpdateVar(v.id, 'key', e.target.value)}
-                              style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px', color: '#38bdf8' }}
+                              style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--color-primary)', background: 'transparent', border: 'none' }}
                             />
                           </td>
                           <td style={{ padding: '6px 8px' }}>
@@ -396,7 +409,7 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
                               placeholder="e.g. https://api.mysite.com"
                               value={v.value}
                               onChange={e => handleUpdateVar(v.id, 'value', e.target.value)}
-                              style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px' }}
+                              style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-main)', background: 'transparent', border: 'none' }}
                             />
                           </td>
                           <td style={{ padding: '8px', textAlign: 'center' }}>
@@ -429,18 +442,18 @@ export default function EnvironmentModal({ isOpen, onClose }: EnvironmentModalPr
         {/* Footer */}
         <div style={{
           padding: '12px 20px',
-          borderTop: '1px solid #1f293d',
+          borderTop: '1px solid var(--border-card)',
           display: 'flex',
           justifyContent: 'flex-end',
-          background: '#0d131f'
+          background: 'var(--bg-surface-secondary)'
         }}>
           <button
             onClick={onClose}
             style={{
               padding: '8px 20px',
               borderRadius: '6px',
-              background: '#38bdf8',
-              color: '#0f172a',
+              background: 'var(--color-primary)',
+              color: '#ffffff',
               fontWeight: 600,
               fontSize: '13px'
             }}

@@ -267,6 +267,21 @@ wails build
 
 File thực thi được xuất ra tại thư mục: `build/bin/Internal Tool API.exe` (Windows).
 
+### Đóng gói qua Docker (Không cần cài Go, Wails, GTK trên máy host)
+
+```bash
+# Build file thực thi Windows (.exe + updater.exe) -> xuất ra ./dist/
+docker compose run --rm build-windows
+# hoặc: npm run docker:build:win
+
+# Build binary Linux -> xuất ra ./dist/
+docker compose run --rm build-linux
+# hoặc: npm run docker:build:linux
+
+# Mở shell môi trường build trong container để debug
+docker compose run --rm shell
+```
+
 ---
 
 ## 8. Version Automation & Auto-Updater

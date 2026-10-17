@@ -1,30 +1,39 @@
-﻿# ── Git ─────────────────────────────────────────────────────────────────────
+# ── Git ─────────────────────────────────────────────────────────────────────
 .git
 .gitignore
 
-# ── Build output (tránh copy vào image) ─────────────────────────────────────
+# ── Build output & dist (tránh copy vào image làm nặng context) ──────────────
 build/bin
+dist/
+dist-bin/
+releases/
+*.exe
+internal-api-client.exe
+updater.exe
+internal/updater/bin/
 
 # ── Node / Frontend cache ────────────────────────────────────────────────────
 node_modules
 frontend/node_modules
 frontend/dist
 
-# ── Go build cache ───────────────────────────────────────────────────────────
+# ── Go build cache & test coverage ───────────────────────────────────────────
 vendor/
+coverage.out
+*.log
 
 # ── Tài liệu & file không cần cho build ─────────────────────────────────────
 README.md
 MOTA-ALL.md
 DACTA.md
+ErrInProj.md
 *.md
 
-# ── IDE & OS ─────────────────────────────────────────────────────────────────
+# ── IDE, OS & Local config ───────────────────────────────────────────────────
 .vscode
 .idea
+.kilo
 *.DS_Store
 Thumbs.db
-
-# ── Secrets & local config ───────────────────────────────────────────────────
 .env
 .env.*

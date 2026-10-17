@@ -28,6 +28,12 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
+		// Anti-reverse engineering & security hardening:
+		// Prevent default browser inspection context menu in production builds
+		EnableDefaultContextMenu: false,
+		Debug: options.Debug{
+			OpenInspectorOnStartup: false,
+		},
 	})
 
 	if err != nil {

@@ -18,6 +18,14 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
+export function CheckSecurityStatus() {
+  return window['go']['main']['App']['CheckSecurityStatus']();
+}
+
+export function ClearActivityHistoryInDB() {
+  return window['go']['main']['App']['ClearActivityHistoryInDB']();
+}
+
 export function ClearMockServerLogs() {
   return window['go']['main']['App']['ClearMockServerLogs']();
 }
@@ -32,6 +40,10 @@ export function CreateProjectInDB(arg1, arg2) {
 
 export function CreateRequestInDB(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['CreateRequestInDB'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function DeleteActivityHistoryFromDB(arg1) {
+  return window['go']['main']['App']['DeleteActivityHistoryFromDB'](arg1);
 }
 
 export function DeleteEnvironmentFromDB(arg1) {
@@ -70,8 +82,12 @@ export function ExecuteStreamRequest(arg1, arg2) {
   return window['go']['main']['App']['ExecuteStreamRequest'](arg1, arg2);
 }
 
-export function ExportFullWorkspace() {
-  return window['go']['main']['App']['ExportFullWorkspace']();
+export function ExportFullWorkspace(arg1) {
+  return window['go']['main']['App']['ExportFullWorkspace'](arg1);
+}
+
+export function GetActivityHistoryFromDB() {
+  return window['go']['main']['App']['GetActivityHistoryFromDB']();
 }
 
 export function GetAllProjectsData() {
@@ -80,6 +96,10 @@ export function GetAllProjectsData() {
 
 export function GetAppInfo() {
   return window['go']['main']['App']['GetAppInfo']();
+}
+
+export function GetAppSetting(arg1) {
+  return window['go']['main']['App']['GetAppSetting'](arg1);
 }
 
 export function GetEnvironmentsFromDB() {
@@ -126,12 +146,24 @@ export function GetUpdateStatus() {
   return window['go']['main']['App']['GetUpdateStatus']();
 }
 
+export function GetWorkspaceSessionFromDB() {
+  return window['go']['main']['App']['GetWorkspaceSessionFromDB']();
+}
+
+export function ImportFullWorkspace(arg1) {
+  return window['go']['main']['App']['ImportFullWorkspace'](arg1);
+}
+
 export function ImportPostmanCollection(arg1) {
   return window['go']['main']['App']['ImportPostmanCollection'](arg1);
 }
 
 export function InstallPlaywrightBrowsers(arg1) {
   return window['go']['main']['App']['InstallPlaywrightBrowsers'](arg1);
+}
+
+export function RenameRequestInDB(arg1, arg2) {
+  return window['go']['main']['App']['RenameRequestInDB'](arg1, arg2);
 }
 
 export function RunScenario(arg1, arg2) {
@@ -142,12 +174,28 @@ export function RunUIScenario(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['RunUIScenario'](arg1, arg2, arg3, arg4);
 }
 
+export function SaveActivityHistoryToDB(arg1) {
+  return window['go']['main']['App']['SaveActivityHistoryToDB'](arg1);
+}
+
 export function SaveAllEnvironmentsToDB(arg1) {
   return window['go']['main']['App']['SaveAllEnvironmentsToDB'](arg1);
 }
 
 export function SaveEnvironmentToDB(arg1) {
   return window['go']['main']['App']['SaveEnvironmentToDB'](arg1);
+}
+
+export function SaveFileContent(arg1, arg2) {
+  return window['go']['main']['App']['SaveFileContent'](arg1, arg2);
+}
+
+export function SaveFileDialog(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SaveFileDialog'](arg1, arg2, arg3, arg4);
+}
+
+export function SaveFileWithDialog(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SaveFileWithDialog'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SaveScenarioToDB(arg1) {
@@ -158,8 +206,16 @@ export function SaveUIScenario(arg1) {
   return window['go']['main']['App']['SaveUIScenario'](arg1);
 }
 
-export function StartDownloadUpdate(arg1, arg2, arg3) {
-  return window['go']['main']['App']['StartDownloadUpdate'](arg1, arg2, arg3);
+export function SaveWorkspaceSessionToDB(arg1) {
+  return window['go']['main']['App']['SaveWorkspaceSessionToDB'](arg1);
+}
+
+export function SetAppSetting(arg1, arg2) {
+  return window['go']['main']['App']['SetAppSetting'](arg1, arg2);
+}
+
+export function StartDownloadUpdate() {
+  return window['go']['main']['App']['StartDownloadUpdate']();
 }
 
 export function StartMockServer(arg1, arg2) {
