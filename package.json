@@ -1,6 +1,6 @@
 {
   "name": "Internal Tool API",
-  "version": "3.0.2",
+  "version": "3.0.0",
   "description": "Cross-platform Internal API Client with Stress Testing & SQLite persistence",
   "private": true,
   "scripts": {
