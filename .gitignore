@@ -4,6 +4,8 @@ frontend/dist/*
 !frontend/dist/.gitkeep
 /dist/
 
+signing.key
+
 DACTA.md
 MOTA-ALL.md
 ErrInProj.md
