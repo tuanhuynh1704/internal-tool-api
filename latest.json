@@ -1,20 +1,20 @@
 {
-  "version": "3.0.1",
+  "version": "3.0.2",
   "platforms": {
     "windows-amd64": {
-      "url": "https://github.com/TuansHuynh/internal-tool-api/releases/download/v3.0.1/Internal Tool API-v3.0.1.exe",
+      "url": "https://github.com/TuansHuynh/internal-tool-api/releases/download/v3.0.2/Internal Tool API-v3.0.2.exe",
       "sha256": "PLACEHOLDER_WINDOWS_SHA256"
     },
     "linux-amd64": {
-      "url": "https://github.com/TuansHuynh/internal-tool-api/releases/download/v3.0.1/Internal Tool API-v3.0.1",
+      "url": "https://github.com/TuansHuynh/internal-tool-api/releases/download/v3.0.2/Internal Tool API-v3.0.2",
       "sha256": "PLACEHOLDER_LINUX_SHA256"
     },
     "darwin-amd64": {
-      "url": "https://github.com/TuansHuynh/internal-tool-api/releases/download/v3.0.1/Internal Tool API-v3.0.1-darwin-amd64",
+      "url": "https://github.com/TuansHuynh/internal-tool-api/releases/download/v3.0.2/Internal Tool API-v3.0.2-darwin-amd64",
       "sha256": "PLACEHOLDER_DARWIN_AMD64_SHA256"
     },
     "darwin-arm64": {
-      "url": "https://github.com/TuansHuynh/internal-tool-api/releases/download/v3.0.1/Internal Tool API-v3.0.1-darwin-arm64",
+      "url": "https://github.com/TuansHuynh/internal-tool-api/releases/download/v3.0.2/Internal Tool API-v3.0.2-darwin-arm64",
       "sha256": "PLACEHOLDER_DARWIN_ARM64_SHA256"
     }
   }
