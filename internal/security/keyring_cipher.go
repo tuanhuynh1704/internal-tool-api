@@ -85,8 +85,8 @@ func (k *keyringCipher) loadOrCreateKey() ([]byte, error) {
 	if _, err = io.ReadFull(rand.Reader, key); err != nil {
 		return nil, fmt.Errorf("generate master key: %w", err)
 	}
-	if err = k.call(func() error {
-		return k.store.Set(keyringService, keyringAccount, base64.StdEncoding.EncodeToString(key))
+	if _, err = callWithTimeout(k.timeout, func() (struct{}, error) {
+		return struct{}{}, k.store.Set(keyringService, keyringAccount, base64.StdEncoding.EncodeToString(key))
 	}); err != nil {
 		return nil, fmt.Errorf("store master key: %w", err)
 	}
@@ -100,24 +100,30 @@ func (k *keyringCipher) loadOrCreateKey() ([]byte, error) {
 }
 
 func (k *keyringCipher) get() (string, error) {
-	var value string
-	err := k.call(func() error {
-		var err error
-		value, err = k.store.Get(keyringService, keyringAccount)
-		return err
+	return callWithTimeout(k.timeout, func() (string, error) {
+		return k.store.Get(keyringService, keyringAccount)
 	})
-	return value, err
 }
 
-// call runs one key store operation with a timeout.
-func (k *keyringCipher) call(op func() error) error {
-	done := make(chan error, 1)
-	go func() { done <- op() }()
+// callWithTimeout runs one key store operation with a timeout. The result
+// travels over the channel only, so an operation that outlives the timeout
+// never writes to anything the caller can still see.
+func callWithTimeout[T any](timeout time.Duration, op func() (T, error)) (T, error) {
+	type result struct {
+		value T
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, err := op()
+		done <- result{value, err}
+	}()
 	select {
-	case err := <-done:
-		return err
-	case <-time.After(k.timeout):
-		return fmt.Errorf("key store did not respond within %s", k.timeout)
+	case r := <-done:
+		return r.value, r.err
+	case <-time.After(timeout):
+		var zero T
+		return zero, fmt.Errorf("key store did not respond within %s", timeout)
 	}
 }
 
