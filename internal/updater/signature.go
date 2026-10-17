@@ -19,7 +19,7 @@ const SignatureSuffix = ".sig"
 // UPDATE_SIGNING_KEY. To rotate: add the new key here, ship a release signed
 // with the old key, then switch the secret and drop the old key later.
 var trustedManifestKeys = []string{
-	"jHW558BL3yHbzzooYFJrnllLdsu9WkTyO2bQiiqmJkg=", // generated 2026-10-16
+	"GdWyYLmuhjNAxe4gArsASfPYAWu1/C2nf0OwQiyC4DI=", // generated 2026-10-16
 }
 
 // ErrManifestSignature is returned when latest.json is unsigned or its
